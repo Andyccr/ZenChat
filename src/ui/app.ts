@@ -4,13 +4,12 @@ import { loadRecentRooms, type RecentRoom } from '../core/recent'
 import { normalizeRoomName, sameRoom } from '../core/room'
 import { RoomManager } from '../core/room-manager'
 import { parseHash, toHash } from '../core/router'
-import { preloadStrategies } from '../core/transports/trystero'
 import type { Member, RoomSpec, SessionStatus, SignalStrategy, ThemePreference } from '../core/types'
 import { copy } from './copy'
 import { el, empty, hostOf, wsLabel } from './dom'
 import { LogView } from './log-view'
 import { StampPicker } from './picker'
-import { applyTheme, cycleTheme, loadThemePreference, persistThemePreference, themeLabel } from './theme'
+import { applyTheme, cycleTheme, loadThemePreference, persistThemePreference } from './theme'
 
 function webrtcReady(): boolean {
   return typeof RTCPeerConnection === 'function'
@@ -29,6 +28,7 @@ export class App {
   private jumpRoom: HTMLInputElement
   private jumpPass: HTMLInputElement
   private jumpStrategy: HTMLSelectElement
+  private footerEl: HTMLElement
   private chat: ChatPane | null = null
   private lobbyEl: HTMLElement | null = null
   private routing = false
@@ -37,7 +37,7 @@ export class App {
     this.root = root
     this.theme = loadThemePreference()
     applyTheme(this.theme)
-    this.themeBtn = el('button', { class: 'btn ghost', type: 'button', title: '主题' }, [themeLabel(this.theme)])
+    this.themeBtn = el('button', { class: 'btn ghost', type: 'button', title: '主题' }, [themeIcon(this.theme)])
     this.tabsEl = el('nav', { class: 'tabs', 'aria-label': copy.recent })
     this.toolsEl = el('div', { class: 'toolbar' })
     this.main = el('main', { class: 'main' })
@@ -48,6 +48,10 @@ export class App {
       el('option', { value: 'nostr' }, [copy.nostr]),
     ]) as HTMLSelectElement
     this.jump = this.buildJump()
+    this.footerEl = el('p', { class: 'footer' }, [
+      el('a', { href: SOURCE_URL, target: '_blank', rel: 'noreferrer' }, [copy.source]),
+      ' · AGPL-3.0',
+    ])
     this.manager = new RoomManager(this.identity, {
       onStatus: (status) => this.chat?.status(status),
       onMembers: (members) => this.chat?.members(members, this.manager.getSession()?.selfId ?? this.identity.id),
@@ -77,9 +81,8 @@ export class App {
       this.theme = cycleTheme(this.theme)
       persistThemePreference(this.theme)
       applyTheme(this.theme)
-      this.themeBtn.textContent = themeLabel(this.theme)
+      this.themeBtn.textContent = themeIcon(this.theme)
     })
-    preloadStrategies()
     void this.route()
   }
 
@@ -96,10 +99,7 @@ export class App {
         ]),
         this.capabilityBanner(),
         this.main,
-        el('p', { class: 'footer' }, [
-          el('a', { href: SOURCE_URL, target: '_blank', rel: 'noreferrer' }, [copy.source]),
-          ' · AGPL-3.0',
-        ]),
+        this.footerEl,
       ]),
       this.jump,
     )
@@ -163,6 +163,8 @@ export class App {
 
   private showLobby(): void {
     this.chat?.hide()
+    this.footerEl.hidden = false
+    this.root.classList.remove('mode-chat')
     if (!this.lobbyEl) this.lobbyEl = this.buildLobby()
     else this.lobbyEl.replaceWith((this.lobbyEl = this.buildLobby()))
     this.main.replaceChildren(this.lobbyEl)
@@ -179,6 +181,8 @@ export class App {
       })
     }
     this.lobbyEl = null
+    this.footerEl.hidden = true
+    this.root.classList.add('mode-chat')
     this.main.replaceChildren(this.chat.root)
     this.chat.show()
     this.refreshTabs(spec)
@@ -195,7 +199,6 @@ export class App {
         peerCount: 0,
       })
     }
-    this.refreshTabs(spec)
   }
 
   private buildLobby(): HTMLElement {
@@ -206,18 +209,20 @@ export class App {
       el('option', { value: 'torrent' }, [copy.torrent]),
       el('option', { value: 'nostr' }, [copy.nostr]),
     ]) as HTMLSelectElement
-    const form = el('form', { class: 'panel form' }, [
-      el('p', { class: 'lede' }, [copy.lobbyHint]),
-      el('div', { class: 'row' }, [
+    const form = el('form', { class: 'panel form lobby-form' }, [
+      el('div', { class: 'join-row' }, [
         field(copy.nick, nick),
         field(copy.room, room),
+        el('button', { class: 'btn primary join-btn', type: 'submit' }, [copy.join]),
       ]),
-      el('div', { class: 'row' }, [
-        field(copy.password, password),
-        field(copy.strategy, strategy),
+      el('details', { class: 'more' }, [
+        el('summary', {}, [copy.more]),
+        el('div', { class: 'row' }, [
+          field(copy.password, password),
+          field(copy.strategy, strategy),
+        ]),
+        el('span', { class: 'hint' }, [copy.passwordHint]),
       ]),
-      el('span', { class: 'hint' }, [copy.passwordHint]),
-      el('div', { class: 'actions' }, [el('button', { class: 'btn primary', type: 'submit' }, [copy.join])]),
     ])
     form.addEventListener('submit', (event) => {
       event.preventDefault()
@@ -284,30 +289,43 @@ class ChatPane {
   readonly log = new LogView()
   private statusEl: HTMLElement
   private membersEl: HTMLElement
-  private waitingEl: HTMLElement
+  private peopleBtn: HTMLButtonElement
+  private lastStatus = ''
 
   constructor(options: { selfId: string; send: (text: string) => void; typing: () => void }) {
     this.statusEl = el('div', { class: 'status' })
     this.membersEl = el('div', { class: 'members' })
-    this.waitingEl = el('p', { class: 'muted' }, [copy.waiting])
+    this.peopleBtn = el('button', { class: 'btn ghost people', type: 'button' }, [copy.people])
+    this.peopleBtn.addEventListener('click', (event) => {
+      event.stopPropagation()
+      this.root.classList.toggle('show-side')
+    })
     const composer = el('textarea', {
-      rows: 2,
+      rows: 1,
       placeholder: copy.placeholder,
       maxlength: 4000,
+      enterkeyhint: 'send',
     }) as HTMLTextAreaElement
+    composer.setAttribute('enterkeyhint', 'send')
+    composer.setAttribute('autocapitalize', 'sentences')
     const picker = new StampPicker(composer)
     const stampBtn = el('button', { class: 'btn ghost', type: 'button', title: copy.stamps }, ['顔'])
-    const sendBtn = el('button', { class: 'btn primary', type: 'button' }, [copy.send])
+    const sendBtn = el('button', { class: 'btn primary send', type: 'button', 'aria-label': copy.send }, ['↑'])
     stampBtn.addEventListener('click', (event) => {
       event.stopPropagation()
       picker.toggle()
     })
-    document.addEventListener('click', () => picker.hide())
+    this.peopleBtn.addEventListener('pointerdown', (event) => event.stopPropagation())
+    document.addEventListener('pointerdown', (event) => {
+      if (!this.root.contains(event.target as Node)) return
+      if (!(event.target as HTMLElement).closest('.picker, .people, .side')) picker.hide()
+    })
     picker.el.addEventListener('click', (event) => event.stopPropagation())
 
     const send = () => {
       const text = composer.value
       composer.value = ''
+      composer.style.height = 'auto'
       picker.hide()
       options.send(text)
     }
@@ -318,19 +336,22 @@ class ChatPane {
         send()
       }
     })
-    composer.addEventListener('input', () => options.typing())
+    composer.addEventListener('input', () => {
+      composer.style.height = 'auto'
+      composer.style.height = `${Math.min(composer.scrollHeight, 96)}px`
+      options.typing()
+    })
 
     this.root = el('div', { class: 'chat' }, [
-      el('section', { class: 'panel transcript' }, [
-        this.statusEl,
+      el('section', { class: 'transcript' }, [
+        el('div', { class: 'status-row' }, [this.statusEl, this.peopleBtn]),
         this.log.el,
         picker.el,
         el('div', { class: 'composer' }, [stampBtn, composer, sendBtn]),
       ]),
-      el('aside', { class: 'panel side' }, [
+      el('aside', { class: 'side' }, [
         el('h2', {}, [copy.members]),
         this.membersEl,
-        this.waitingEl,
       ]),
     ])
     this.members([], options.selfId)
@@ -338,6 +359,7 @@ class ChatPane {
 
   hide(): void {
     this.root.hidden = true
+    this.root.classList.remove('show-side')
   }
 
   show(): void {
@@ -346,17 +368,21 @@ class ChatPane {
 
   status(status: SessionStatus): void {
     const open = status.relays.filter((relay) => relay.readyState === WebSocket.OPEN).length
+    const key = `${status.phase}|${status.detail}|${status.peerCount}|${open}`
+    if (key === this.lastStatus) return
+    this.lastStatus = key
     this.statusEl.replaceChildren(
-      el('span', {}, [el('i', { class: `dot${status.peerCount > 0 ? ' ok' : ''}` }), ` ${status.detail}`]),
-      el('span', {}, [`${status.peerCount} 人 · 信令 ${open}/${Math.max(status.relays.length, 1)}`]),
+      el('i', { class: `dot${status.peerCount > 0 ? ' ok' : ''}` }),
+      el('span', {}, [` ${status.detail}`]),
     )
+    this.peopleBtn.textContent = `${copy.people} ${status.peerCount}`
     this.statusEl.title = status.relays.map((relay) => `${hostOf(relay.url)} ${wsLabel(relay.readyState)}`).join('\n')
   }
 
   members(list: Member[], selfId: string): void {
     this.membersEl.replaceChildren(
       el('div', { class: 'member' }, [
-        el('b', { style: `color:${colorFromId(selfId)}` }, [copy.you]),
+        el('b', {}, [copy.you]),
         el('span', { class: 'muted' }, [selfId.slice(0, 8)]),
       ]),
       ...list.map((member) =>
@@ -366,12 +392,17 @@ class ChatPane {
         ]),
       ),
     )
-    this.waitingEl.hidden = list.length > 0
   }
 }
 
 function field(label: string, control: HTMLElement): HTMLElement {
   return el('label', { class: 'field' }, [el('span', {}, [label]), control])
+}
+
+function themeIcon(pref: ThemePreference): string {
+  if (pref === 'light') return '浅色'
+  if (pref === 'dark') return '深色'
+  return '自动'
 }
 
 function specFromRecent(item: RecentRoom, active?: RoomSpec): RoomSpec {

@@ -92,9 +92,9 @@ export class ChatSession {
           this.upsertMember(peerId, '访客')
           this.pushSystem(`${peerId.slice(0, 6)} 加入了房间`)
           void this.transport.send(createHelloPayload(this.identity.nick), peerId)
-          void this.measure(peerId)
           this.emitMembers()
           this.refreshStatus('connected', `直连 ${this.transport.peerIds().length}`)
+          window.setTimeout(() => void this.measure(peerId), 350)
         },
         onPeerLeave: (peerId) => {
           const member = this.members.get(peerId)
@@ -129,7 +129,7 @@ export class ChatSession {
       ts: payload.ts,
       self: true,
     })
-    await this.transport.send(payload)
+    void this.transport.send(payload)
   }
 
   sendTyping(): void {
@@ -252,6 +252,16 @@ export class ChatSession {
   }
 
   private setStatus(status: SessionStatus): void {
+    const prev = this.status
+    if (
+      prev.phase === status.phase &&
+      prev.detail === status.detail &&
+      prev.peerCount === status.peerCount &&
+      prev.relays.length === status.relays.length &&
+      prev.relays.every((relay, i) => relay.readyState === status.relays[i]?.readyState)
+    ) {
+      return
+    }
     this.status = status
     this.listeners.onStatus?.(status)
   }
