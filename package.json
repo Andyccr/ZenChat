@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:pages": "GITHUB_PAGES=true npm run build && node scripts/copy-pages.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest"
