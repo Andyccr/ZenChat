@@ -1,24 +1,24 @@
-name: Deploy GitHub Pages
+name: Publish GitHub Pages files
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
 concurrency:
-  group: pages
+  group: publish-pages-files
   cancel-in-progress: true
 
 jobs:
-  build:
+  publish:
+    if: ${{ !contains(github.event.head_commit.message, '[skip pages]') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -28,16 +28,15 @@ jobs:
       - run: npm run build
         env:
           GITHUB_PAGES: 'true'
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - run: node scripts/copy-pages.mjs
+      - name: Commit compiled site to main
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html 404.html favicon.svg .nojekyll assets
+          if git diff --staged --quiet; then
+            echo 'Pages bundle unchanged'
+            exit 0
+          fi
+          git commit -m "Publish GitHub Pages bundle [skip pages]"
+          git push

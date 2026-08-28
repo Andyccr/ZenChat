@@ -152,11 +152,11 @@ npm run dev
 
 打开两个浏览器窗口，进入同一房间名即可互发。主题按钮在「跟随系统 / 白天 / 黑夜」之间循环。
 
-GitHub Pages：
+GitHub Pages（当前仓库是 **Deploy from a branch: `main` / **，不要只提交 Vite 源码）：
 
-1. 仓库 Settings → Pages → Source 选 **GitHub Actions**
-2. 合并到 `main` 后，`.github/workflows/pages.yml` 会构建并发布 `dist/`
-3. 访问 `https://andyccr.github.io/ZenChat/#/r/lobby`
+1. 源码入口在 `src/index.html`。`npm run build:pages` 会编译出浏览器能跑的 `index.html` + `assets/` 放到仓库根目录。
+2. 合并到 `main` 后，GitHub 会直接托管这些静态文件；Actions 也会在 `main` 上自动再编译一次并回写。
+3. 打开 https://andyccr.github.io/ZenChat/ 或 https://andyccr.com/ZenChat/ （需 HTTPS，WebRTC 才可用）。
 
 ---
 
