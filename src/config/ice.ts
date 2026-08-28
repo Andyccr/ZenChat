@@ -1,15 +1,15 @@
 /**
- * Public STUN servers only. TURN requires credentials that cannot be
- * safely minted from a purely static GitHub Pages deployment.
- * Symmetric NAT / CGNAT users may fail to connect without TURN.
+ * Public STUN only. Extra STUN endpoints slow ICE gathering,
+ * so keep this list short. TURN cannot be minted from GitHub Pages.
  */
 export const ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun.cloudflare.com:3478' },
-  { urls: 'stun:stun.l.google.com:19305' },
+  { urls: 'stun:stun.l.google.com:19302' },
 ]
 
 export const RTC_CONFIG: RTCConfiguration = {
   iceServers: ICE_SERVERS,
-  iceCandidatePoolSize: 4,
+  iceCandidatePoolSize: 8,
+  bundlePolicy: 'max-bundle',
+  rtcpMuxPolicy: 'require',
 }
