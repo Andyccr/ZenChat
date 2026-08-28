@@ -20,6 +20,14 @@ export function roomNamespace(spec: Pick<RoomSpec, 'name' | 'password'>): string
   return `${name}::${spec.password}`
 }
 
-export function recentRoomKey(spec: RoomSpec): string {
+export function recentRoomKey(spec: Pick<RoomSpec, 'name' | 'strategy'>): string {
   return `${spec.strategy}:${normalizeRoomName(spec.name)}`
+}
+
+export function sessionKey(spec: RoomSpec): string {
+  return `${spec.strategy}:${normalizeRoomName(spec.name)}:${spec.password}`
+}
+
+export function sameRoom(a: RoomSpec, b: RoomSpec): boolean {
+  return sessionKey(a) === sessionKey(b)
 }

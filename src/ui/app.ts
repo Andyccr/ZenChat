@@ -1,297 +1,380 @@
 import { DEFAULT_ROOM, SOURCE_URL } from '../config/app'
 import { colorFromId, loadIdentity, persistNick } from '../core/identity'
-import { loadRecentRooms, rememberRoom } from '../core/recent'
+import { loadRecentRooms, type RecentRoom } from '../core/recent'
+import { normalizeRoomName, sameRoom } from '../core/room'
+import { RoomManager } from '../core/room-manager'
 import { parseHash, toHash } from '../core/router'
-import { ChatSession } from '../core/session'
-import type { ChatLine, Member, RoomSpec, SessionStatus, SignalStrategy, ThemePreference } from '../core/types'
+import { preloadStrategies } from '../core/transports/trystero'
+import type { Member, RoomSpec, SessionStatus, SignalStrategy, ThemePreference } from '../core/types'
 import { copy } from './copy'
-import { el, empty, formatTime, hostOf, wsLabel } from './dom'
+import { el, empty, hostOf, wsLabel } from './dom'
+import { LogView } from './log-view'
+import { StampPicker } from './picker'
 import { applyTheme, cycleTheme, loadThemePreference, persistThemePreference, themeLabel } from './theme'
 
 function webrtcReady(): boolean {
   return typeof RTCPeerConnection === 'function'
 }
 
-function secureContext(): boolean {
-  return window.isSecureContext
-}
-
 export class App {
   private root: HTMLElement
   private theme: ThemePreference
   private identity = loadIdentity()
-  private session: ChatSession | null = null
-  private media: MediaQueryList | null = null
+  private manager: RoomManager
+  private themeBtn: HTMLButtonElement
+  private tabsEl: HTMLElement
+  private toolsEl: HTMLElement
+  private main: HTMLElement
+  private jump: HTMLDialogElement
+  private jumpRoom: HTMLInputElement
+  private jumpPass: HTMLInputElement
+  private jumpStrategy: HTMLSelectElement
+  private chat: ChatPane | null = null
+  private lobbyEl: HTMLElement | null = null
+  private routing = false
 
   constructor(root: HTMLElement) {
     this.root = root
     this.theme = loadThemePreference()
     applyTheme(this.theme)
+    this.themeBtn = el('button', { class: 'btn ghost', type: 'button', title: '主题' }, [themeLabel(this.theme)])
+    this.tabsEl = el('nav', { class: 'tabs', 'aria-label': copy.recent })
+    this.toolsEl = el('div', { class: 'toolbar' })
+    this.main = el('main', { class: 'main' })
+    this.jumpRoom = el('input', { placeholder: copy.room, maxlength: 64, autocomplete: 'off' }) as HTMLInputElement
+    this.jumpPass = el('input', { placeholder: copy.password, type: 'password', autocomplete: 'off' }) as HTMLInputElement
+    this.jumpStrategy = el('select', {}, [
+      el('option', { value: 'torrent' }, [copy.torrent]),
+      el('option', { value: 'nostr' }, [copy.nostr]),
+    ]) as HTMLSelectElement
+    this.jump = this.buildJump()
+    this.manager = new RoomManager(this.identity, {
+      onStatus: (status) => this.chat?.status(status),
+      onMembers: (members) => this.chat?.members(members, this.manager.getSession()?.selfId ?? this.identity.id),
+      onLine: (line) => this.chat?.log.append(line),
+      onReset: (lines) => this.chat?.log.reset(lines),
+    })
   }
 
   start(): void {
-    this.media = window.matchMedia('(prefers-color-scheme: dark)')
-    this.media.addEventListener('change', () => applyTheme(this.theme))
-    window.addEventListener('hashchange', () => void this.render())
-    window.addEventListener('pagehide', () => {
-      void this.session?.leave()
+    this.mount()
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applyTheme(this.theme))
+    window.addEventListener('hashchange', () => {
+      if (!this.routing) void this.route()
     })
-    void this.render()
-  }
-
-  private async render(): Promise<void> {
-    empty(this.root)
-    const route = parseHash(location.hash)
-    const shell = el('div', { class: 'shell' }, [
-      this.topbar(route.name === 'room' ? route.spec : null),
-    ])
-
-    if (!secureContext()) {
-      shell.append(el('div', { class: 'banner' }, [copy.insecure]))
-    } else if (!webrtcReady()) {
-      shell.append(el('div', { class: 'banner' }, [copy.webrtcMissing]))
-    }
-
-    if (route.name === 'lobby') {
-      await this.session?.leave()
-      this.session = null
-      shell.append(this.lobby())
-    } else {
-      shell.append(await this.chat(route.spec))
-    }
-
-    shell.append(
-      el('p', { class: 'footer' }, [
-        el('a', { href: SOURCE_URL, target: '_blank', rel: 'noreferrer' }, [copy.source]),
-        ' · AGPL-3.0 · 消息只经过浏览器之间的 DataChannel',
-      ]),
-    )
-    this.root.append(shell)
-  }
-
-  private topbar(spec: RoomSpec | null): HTMLElement {
-    const themeBtn = el('button', { class: 'btn', type: 'button' }, [`主题：${themeLabel(this.theme)}`])
-    themeBtn.addEventListener('click', () => {
+    window.addEventListener('pagehide', () => {
+      void this.manager.close()
+    })
+    window.addEventListener('keydown', (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        this.jump.showModal()
+        this.jumpRoom.focus()
+      }
+      if (event.key === 'Escape') this.jump.close()
+    })
+    this.themeBtn.addEventListener('click', () => {
       this.theme = cycleTheme(this.theme)
       persistThemePreference(this.theme)
       applyTheme(this.theme)
-      themeBtn.textContent = `主题：${themeLabel(this.theme)}`
+      this.themeBtn.textContent = themeLabel(this.theme)
     })
-
-    const tools: HTMLElement[] = [themeBtn]
-    if (spec) {
-      const share = el('button', { class: 'btn', type: 'button' }, [copy.share])
-      share.addEventListener('click', async () => {
-        await navigator.clipboard.writeText(`${location.origin}${location.pathname}${toHash({ name: 'room', spec })}`)
-        share.textContent = copy.copied
-        window.setTimeout(() => {
-          share.textContent = copy.share
-        }, 1200)
-      })
-      tools.push(share)
-      if (spec.password) {
-        const shareKey = el('button', { class: 'btn', type: 'button' }, [copy.shareWithKey])
-        shareKey.addEventListener('click', async () => {
-          await navigator.clipboard.writeText(
-            `${location.origin}${location.pathname}${toHash({ name: 'room', spec }, true)}`,
-          )
-          shareKey.textContent = copy.copied
-        })
-        tools.push(shareKey)
-      }
-      const leave = el('button', { class: 'btn', type: 'button' }, [copy.leave])
-      leave.addEventListener('click', () => {
-        location.hash = '#/'
-      })
-      tools.push(leave)
-    }
-
-    return el('header', { class: 'topbar' }, [
-      el('a', { class: 'brand', href: '#/' }, [
-        el('div', { class: 'enso', 'aria-hidden': 'true' }),
-        el('strong', {}, [copy.title]),
-        el('span', {}, [copy.tagline]),
-      ]),
-      el('div', { class: 'toolbar' }, tools),
-    ])
+    preloadStrategies()
+    void this.route()
   }
 
-  private lobby(): HTMLElement {
-    const nick = el('input', {
-      id: 'nick',
-      maxlength: 24,
-      value: this.identity.nick,
-      autocomplete: 'nickname',
-    }) as HTMLInputElement
-    const room = el('input', {
-      id: 'room',
-      maxlength: 64,
-      value: DEFAULT_ROOM,
-      autocomplete: 'off',
-    }) as HTMLInputElement
-    const password = el('input', {
-      id: 'password',
-      type: 'password',
-      autocomplete: 'off',
-    }) as HTMLInputElement
-    const strategy = el('select', { id: 'strategy' }, [
-      el('option', { value: 'torrent', selected: true }, [copy.torrent]),
+  private mount(): void {
+    this.root.append(
+      el('div', { class: 'shell' }, [
+        el('header', { class: 'topbar' }, [
+          el('a', { class: 'brand', href: '#/' }, [
+            el('div', { class: 'enso', 'aria-hidden': 'true' }),
+            el('strong', {}, [copy.title]),
+          ]),
+          this.tabsEl,
+          this.toolsEl,
+        ]),
+        this.capabilityBanner(),
+        this.main,
+        el('p', { class: 'footer' }, [
+          el('a', { href: SOURCE_URL, target: '_blank', rel: 'noreferrer' }, [copy.source]),
+          ' · AGPL-3.0',
+        ]),
+      ]),
+      this.jump,
+    )
+  }
+
+  private capabilityBanner(): HTMLElement {
+    if (!window.isSecureContext) return el('div', { class: 'banner' }, [copy.insecure])
+    if (!webrtcReady()) return el('div', { class: 'banner' }, [copy.webrtcMissing])
+    return el('div')
+  }
+
+  private buildJump(): HTMLDialogElement {
+    const form = el('form', { class: 'jump-form', method: 'dialog' }, [
+      el('h2', {}, [copy.switch]),
+      this.jumpRoom,
+      this.jumpPass,
+      this.jumpStrategy,
+      el('div', { class: 'actions' }, [
+        el('button', { class: 'btn primary', type: 'submit' }, [copy.join]),
+        el('button', { class: 'btn ghost', type: 'button', value: 'cancel' }, ['取消']),
+      ]),
+    ])
+    const dialog = el('dialog', { class: 'jump' }, [form]) as HTMLDialogElement
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      const spec: RoomSpec = {
+        name: this.jumpRoom.value,
+        password: this.jumpPass.value,
+        strategy: this.jumpStrategy.value as SignalStrategy,
+      }
+      dialog.close()
+      this.go(spec)
+    })
+    form.querySelector('button[value="cancel"]')?.addEventListener('click', () => dialog.close())
+    return dialog
+  }
+
+  private async route(): Promise<void> {
+    const route = parseHash(location.hash)
+    this.refreshTabs()
+    this.refreshTools(route.name === 'room' ? route.spec : null)
+    if (route.name === 'lobby') {
+      await this.manager.close()
+      this.showLobby()
+      return
+    }
+    await this.showChat(route.spec)
+  }
+
+  private go(spec: RoomSpec): void {
+    const next = toHash({ name: 'room', spec }, Boolean(spec.password))
+    if (location.hash === next) {
+      void this.showChat(spec)
+      return
+    }
+    this.routing = true
+    location.hash = next
+    this.routing = false
+    void this.showChat(spec)
+  }
+
+  private showLobby(): void {
+    this.chat?.hide()
+    if (!this.lobbyEl) this.lobbyEl = this.buildLobby()
+    else this.lobbyEl.replaceWith((this.lobbyEl = this.buildLobby()))
+    this.main.replaceChildren(this.lobbyEl)
+    this.refreshTabs()
+  }
+
+  private async showChat(spec: RoomSpec): Promise<void> {
+    const current = this.manager.current()
+    if (!this.chat) {
+      this.chat = new ChatPane({
+        selfId: this.identity.id,
+        send: (text) => void this.manager.getSession()?.sendChat(text),
+        typing: () => this.manager.getSession()?.sendTyping(),
+      })
+    }
+    this.lobbyEl = null
+    this.main.replaceChildren(this.chat.root)
+    this.chat.show()
+    this.refreshTabs(spec)
+    this.refreshTools(spec)
+    if (current && sameRoom(current, spec)) return
+    try {
+      await this.manager.open(spec)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : '连接失败'
+      this.chat.status({
+        phase: 'error',
+        detail: `无法启动 P2P：${detail}`,
+        relays: [],
+        peerCount: 0,
+      })
+    }
+    this.refreshTabs(spec)
+  }
+
+  private buildLobby(): HTMLElement {
+    const nick = el('input', { maxlength: 24, value: this.identity.nick, autocomplete: 'nickname' }) as HTMLInputElement
+    const room = el('input', { maxlength: 64, value: DEFAULT_ROOM, autocomplete: 'off' }) as HTMLInputElement
+    const password = el('input', { type: 'password', autocomplete: 'off' }) as HTMLInputElement
+    const strategy = el('select', {}, [
+      el('option', { value: 'torrent' }, [copy.torrent]),
       el('option', { value: 'nostr' }, [copy.nostr]),
     ]) as HTMLSelectElement
-
-    const form = el('form', { class: 'panel grid' }, [
+    const form = el('form', { class: 'panel form' }, [
       el('p', { class: 'lede' }, [copy.lobbyHint]),
-      el('label', { class: 'field' }, [el('span', {}, [copy.nick]), nick]),
-      el('label', { class: 'field' }, [el('span', {}, [copy.room]), room]),
-      el('label', { class: 'field' }, [el('span', {}, [copy.password]), password, el('span', { class: 'hint' }, [copy.passwordHint])]),
-      el('label', { class: 'field' }, [el('span', {}, [copy.strategy]), strategy]),
+      el('div', { class: 'row' }, [
+        field(copy.nick, nick),
+        field(copy.room, room),
+      ]),
+      el('div', { class: 'row' }, [
+        field(copy.password, password),
+        field(copy.strategy, strategy),
+      ]),
+      el('span', { class: 'hint' }, [copy.passwordHint]),
       el('div', { class: 'actions' }, [el('button', { class: 'btn primary', type: 'submit' }, [copy.join])]),
     ])
-
     form.addEventListener('submit', (event) => {
       event.preventDefault()
       this.identity = { ...this.identity, nick: persistNick(nick.value) }
-      const spec: RoomSpec = {
+      this.manager.setIdentity(this.identity)
+      this.go({
         name: room.value,
         password: password.value,
         strategy: strategy.value as SignalStrategy,
-      }
-      location.hash = toHash({ name: 'room', spec }, Boolean(spec.password))
+      })
     })
-
-    const recent = loadRecentRooms()
-    const recentBlock = el('section', { class: 'recent' }, [
-      el('h2', {}, [copy.recent]),
-      recent.length === 0
-        ? el('p', { class: 'muted' }, [copy.emptyRecent])
-        : el(
-            'div',
-            { class: 'chips' },
-            recent.map((item) =>
-              el(
-                'a',
-                {
-                  class: 'chip',
-                  href: toHash({
-                    name: 'room',
-                    spec: { name: item.name, password: '', strategy: item.strategy },
-                  }),
-                },
-                [`${item.name} · ${item.strategy === 'torrent' ? 'Tracker' : 'Nostr'}`],
-              ),
-            ),
-          ),
-    ])
-
-    return el('div', {}, [form, recentBlock])
+    return form
   }
 
-  private async chat(spec: RoomSpec): Promise<HTMLElement> {
-    await this.session?.leave()
-    rememberRoom(spec)
+  private refreshTabs(active?: RoomSpec): void {
+    const rooms = loadRecentRooms()
+    empty(this.tabsEl)
+    for (const item of rooms) {
+      const spec: RoomSpec = { name: item.name, password: '', strategy: item.strategy }
+      const current = Boolean(active && item.name === normalizeRoomName(active.name) && item.strategy === active.strategy)
+      const tab = el('a', { class: `tab${current ? ' on' : ''}`, href: toHash({ name: 'room', spec }) }, [item.name])
+      tab.addEventListener('click', (event) => {
+        event.preventDefault()
+        this.go(specFromRecent(item, active))
+      })
+      this.tabsEl.append(tab)
+    }
+    const add = el('button', { class: 'tab add', type: 'button', title: copy.addRoom }, ['+'])
+    add.addEventListener('click', () => {
+      this.jump.showModal()
+      this.jumpRoom.focus()
+    })
+    this.tabsEl.append(add)
+  }
 
-    const statusEl = el('div', { class: 'status' })
-    const log = el('div', { class: 'log' })
-    const membersEl = el('div')
+  private refreshTools(spec: RoomSpec | null): void {
+    empty(this.toolsEl)
+    this.toolsEl.append(this.themeBtn)
+    if (!spec) return
+    const share = el('button', { class: 'btn ghost', type: 'button' }, [copy.share])
+    share.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(`${location.origin}${location.pathname}${toHash({ name: 'room', spec })}`)
+      share.textContent = copy.copied
+      window.setTimeout(() => {
+        share.textContent = copy.share
+      }, 1000)
+    })
+    this.toolsEl.append(share)
+    if (spec.password) {
+      const shareKey = el('button', { class: 'btn ghost', type: 'button' }, [copy.shareWithKey])
+      shareKey.addEventListener('click', async () => {
+        await navigator.clipboard.writeText(`${location.origin}${location.pathname}${toHash({ name: 'room', spec }, true)}`)
+        shareKey.textContent = copy.copied
+      })
+      this.toolsEl.append(shareKey)
+    }
+    const leave = el('a', { class: 'btn ghost', href: '#/' }, [copy.leave])
+    this.toolsEl.append(leave)
+  }
+}
+
+class ChatPane {
+  readonly root: HTMLElement
+  readonly log = new LogView()
+  private statusEl: HTMLElement
+  private membersEl: HTMLElement
+  private waitingEl: HTMLElement
+
+  constructor(options: { selfId: string; send: (text: string) => void; typing: () => void }) {
+    this.statusEl = el('div', { class: 'status' })
+    this.membersEl = el('div', { class: 'members' })
+    this.waitingEl = el('p', { class: 'muted' }, [copy.waiting])
     const composer = el('textarea', {
-      rows: 3,
+      rows: 2,
       placeholder: copy.placeholder,
       maxlength: 4000,
     }) as HTMLTextAreaElement
+    const picker = new StampPicker(composer)
+    const stampBtn = el('button', { class: 'btn ghost', type: 'button', title: copy.stamps }, ['顔'])
     const sendBtn = el('button', { class: 'btn primary', type: 'button' }, [copy.send])
-
-    this.session = new ChatSession(this.identity, {
-      onStatus: (status) => renderStatus(statusEl, status, spec),
-      onMembers: (members) => renderMembers(membersEl, members, this.session?.selfId ?? this.identity.id),
-      onMessages: (lines) => renderMessages(log, lines),
+    stampBtn.addEventListener('click', (event) => {
+      event.stopPropagation()
+      picker.toggle()
     })
+    document.addEventListener('click', () => picker.hide())
+    picker.el.addEventListener('click', (event) => event.stopPropagation())
 
-    try {
-      await this.session.join(spec)
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : '连接失败'
-      statusEl.replaceChildren(el('span', {}, [`无法启动 P2P：${detail}`]))
-    }
-
-    const send = async () => {
+    const send = () => {
       const text = composer.value
       composer.value = ''
-      await this.session?.sendChat(text)
+      picker.hide()
+      options.send(text)
     }
-
-    sendBtn.addEventListener('click', () => void send())
+    sendBtn.addEventListener('click', send)
     composer.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault()
-        void send()
+        send()
       }
     })
-    composer.addEventListener('input', () => {
-      void this.session?.sendTyping()
-    })
+    composer.addEventListener('input', () => options.typing())
 
-    return el('div', { class: 'chat' }, [
+    this.root = el('div', { class: 'chat' }, [
       el('section', { class: 'panel transcript' }, [
-        statusEl,
-        log,
-        el('div', { class: 'composer' }, [composer, sendBtn]),
+        this.statusEl,
+        this.log.el,
+        picker.el,
+        el('div', { class: 'composer' }, [stampBtn, composer, sendBtn]),
       ]),
       el('aside', { class: 'panel side' }, [
         el('h2', {}, [copy.members]),
-        membersEl,
-        el('p', { class: 'muted' }, [copy.waiting]),
+        this.membersEl,
+        this.waitingEl,
       ]),
     ])
+    this.members([], options.selfId)
   }
-}
 
-function renderStatus(root: HTMLElement, status: SessionStatus, spec: RoomSpec): void {
-  empty(root)
-  const open = status.relays.filter((relay) => relay.readyState === WebSocket.OPEN).length
-  root.append(
-    el('span', {}, [
-      el('i', { class: `dot${status.peerCount > 0 ? ' ok' : ''}` }),
-      `  ${spec.name} · ${status.detail}`,
-    ]),
-    el('span', {}, [`节点 ${status.peerCount} · 信令 ${open}/${Math.max(status.relays.length, 1)}`]),
-  )
-  if (status.relays.length > 0) {
-    root.title = status.relays.map((relay) => `${hostOf(relay.url)} ${wsLabel(relay.readyState)}`).join('\n')
+  hide(): void {
+    this.root.hidden = true
   }
-}
 
-function renderMembers(root: HTMLElement, members: Member[], selfId: string): void {
-  empty(root)
-  root.append(
-    el('div', { class: 'member' }, [
-      el('b', { style: `color:${colorFromId(selfId)}` }, [`${copy.you}`]),
-      el('span', { class: 'muted' }, [selfId.slice(0, 8)]),
-    ]),
-  )
-  for (const member of members) {
-    const extra = member.typing ? '正在输入…' : member.rttMs !== null ? `${Math.round(member.rttMs)} ms` : '已连接'
-    root.append(
+  show(): void {
+    this.root.hidden = false
+  }
+
+  status(status: SessionStatus): void {
+    const open = status.relays.filter((relay) => relay.readyState === WebSocket.OPEN).length
+    this.statusEl.replaceChildren(
+      el('span', {}, [el('i', { class: `dot${status.peerCount > 0 ? ' ok' : ''}` }), ` ${status.detail}`]),
+      el('span', {}, [`${status.peerCount} 人 · 信令 ${open}/${Math.max(status.relays.length, 1)}`]),
+    )
+    this.statusEl.title = status.relays.map((relay) => `${hostOf(relay.url)} ${wsLabel(relay.readyState)}`).join('\n')
+  }
+
+  members(list: Member[], selfId: string): void {
+    this.membersEl.replaceChildren(
       el('div', { class: 'member' }, [
-        el('b', { style: `color:${colorFromId(member.id)}` }, [member.nick]),
-        el('span', { class: 'muted' }, [extra]),
+        el('b', { style: `color:${colorFromId(selfId)}` }, [copy.you]),
+        el('span', { class: 'muted' }, [selfId.slice(0, 8)]),
       ]),
+      ...list.map((member) =>
+        el('div', { class: 'member' }, [
+          el('b', { style: `color:${colorFromId(member.id)}` }, [member.nick]),
+          el('span', { class: 'muted' }, [member.typing ? '输入中' : member.rttMs !== null ? `${Math.round(member.rttMs)}ms` : '']),
+        ]),
+      ),
     )
+    this.waitingEl.hidden = list.length > 0
   }
 }
 
-function renderMessages(root: HTMLElement, lines: ChatLine[]): void {
-  empty(root)
-  for (const line of lines) {
-    if (line.kind === 'system') {
-      root.append(el('div', { class: 'system' }, [line.text]))
-      continue
-    }
-    root.append(
-      el('article', { class: `bubble${line.self ? ' self' : ''}` }, [
-        el('header', {}, [el('b', { style: `color:${colorFromId(line.fromId)}` }, [line.nick]), el('span', {}, [formatTime(line.ts)])]),
-        el('p', {}, [line.text]),
-      ]),
-    )
-  }
-  root.scrollTop = root.scrollHeight
+function field(label: string, control: HTMLElement): HTMLElement {
+  return el('label', { class: 'field' }, [el('span', {}, [label]), control])
+}
+
+function specFromRecent(item: RecentRoom, active?: RoomSpec): RoomSpec {
+  const password = active && item.name === normalizeRoomName(active.name) && item.strategy === active.strategy ? active.password : ''
+  return { name: item.name, password, strategy: item.strategy }
 }
