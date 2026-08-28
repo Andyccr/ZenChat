@@ -150,7 +150,7 @@ npm test
 npm run dev
 ```
 
-打开两个浏览器窗口，进入同一房间名即可互发。主题按钮在「跟随系统 / 白天 / 黑夜」之间循环。
+打开两个浏览器窗口，进入同一房间名即可互发。顶栏房间标签或 `Ctrl/Cmd+K` 可快速切换聊天室。输入框旁「顔」可插入颜文字和表情。主题按钮在「跟随系统 / 白天 / 黑夜」之间循环。
 
 GitHub Pages（当前仓库是 **Deploy from a branch: `main` / **，不要只提交 Vite 源码）：
 
@@ -166,7 +166,10 @@ GitHub Pages（当前仓库是 **Deploy from a branch: `main` / **，不要只�
 UI (lobby / chat / theme)
         │
         ▼
- ChatSession   应用协议、成员表、去重、心跳
+ RoomManager   快切房间、本地日志缓存、同房去重
+        │
+        ▼
+ ChatSession   增量消息、节流输入、后台暂停心跳
         │
         ▼
  SignallingTransport 接口

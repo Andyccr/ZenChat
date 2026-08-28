@@ -41,11 +41,7 @@ export function rememberRoom(spec: RoomSpec): RecentRoom[] {
     hasPassword: Boolean(spec.password),
     visitedAt: Date.now(),
   }
-  const others = loadRecentRooms().filter((item) => recentRoomKey({
-    name: item.name,
-    password: '',
-    strategy: item.strategy,
-  }) !== recentRoomKey(spec))
+  const others = loadRecentRooms().filter((item) => recentRoomKey(item) !== recentRoomKey(spec))
   const list = [next, ...others].slice(0, MAX_RECENT_ROOMS)
   localStorage.setItem(KEY, JSON.stringify(list))
   return list

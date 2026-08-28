@@ -108,19 +108,32 @@ export class TrysteroTransport implements SignallingTransport {
   }
 }
 
+const modules = new Map<SignalStrategy, Promise<StrategyModule>>()
+
 async function loadStrategy(strategy: SignalStrategy): Promise<StrategyModule> {
-  if (strategy === 'torrent') {
-    const mod = await import('@trystero-p2p/torrent')
-    return {
-      joinRoom: mod.joinRoom,
-      getRelaySockets: mod.getRelaySockets,
-      selfId: mod.selfId,
-    }
+  const cached = modules.get(strategy)
+  if (cached) return cached
+  const pending =
+    strategy === 'torrent'
+      ? import('@trystero-p2p/torrent').then((mod) => ({
+          joinRoom: mod.joinRoom,
+          getRelaySockets: mod.getRelaySockets,
+          selfId: mod.selfId,
+        }))
+      : import('@trystero-p2p/nostr').then((mod) => ({
+          joinRoom: mod.joinRoom,
+          getRelaySockets: mod.getRelaySockets,
+          selfId: mod.selfId,
+        }))
+  modules.set(strategy, pending)
+  return pending
+}
+
+export function preloadStrategies(): void {
+  const run = () => {
+    void loadStrategy('torrent')
+    void loadStrategy('nostr')
   }
-  const mod = await import('@trystero-p2p/nostr')
-  return {
-    joinRoom: mod.joinRoom,
-    getRelaySockets: mod.getRelaySockets,
-    selfId: mod.selfId,
-  }
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 1500 })
+  else setTimeout(run, 300)
 }
