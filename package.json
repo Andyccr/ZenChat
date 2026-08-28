@@ -1,0 +1,25 @@
+{
+  "name": "zenchat",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "description": "Serverless browser-to-browser chat for GitHub Pages, using WebRTC DataChannels and public WebTorrent trackers.",
+  "homepage": "https://andyccr.github.io/ZenChat/",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@trystero-p2p/nostr": "^0.25.3",
+    "@trystero-p2p/torrent": "^0.25.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "vite": "^7.1.3",
+    "vitest": "^3.2.4"
+  }
+}

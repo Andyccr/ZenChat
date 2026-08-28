@@ -1,0 +1,13 @@
+export const APP_ID = 'zenchat.andyccr.v1'
+export const APP_NAME = 'ZenChat'
+export const PROTOCOL_VERSION = 1
+export const MAX_NICK_LENGTH = 24
+export const MAX_ROOM_LENGTH = 64
+export const MAX_MESSAGE_LENGTH = 4000
+export const MAX_RECENT_ROOMS = 8
+export const DEFAULT_ROOM = 'lobby'
+export const TYPING_TTL_MS = 2500
+export const HELLO_INTERVAL_MS = 25_000
+export const RELAY_POLL_MS = 2000
+export const SOURCE_URL = 'https://github.com/Andyccr/ZenChat'
+export const PAGES_URL = 'https://andyccr.github.io/ZenChat/'
