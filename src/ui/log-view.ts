@@ -27,8 +27,10 @@ export class LogView {
 
   private stick(): void {
     const node = this.el
-    const nearBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 80
-    if (nearBottom) node.scrollTop = node.scrollHeight
+    requestAnimationFrame(() => {
+      const nearBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 96
+      if (nearBottom) node.scrollTop = node.scrollHeight
+    })
   }
 }
 

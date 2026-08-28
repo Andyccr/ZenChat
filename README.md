@@ -1,148 +1,66 @@
-# ZenChat 禅聊
+# ZenChat
 
-部署在 GitHub Pages（或其他纯静态托管）上的浏览器 P2P 聊天室。页面本身不含任何后端；房间发现走公共 WebTorrent Tracker 或 Nostr 中继，消息在建立连接后只经过 WebRTC DataChannel。
+Serverless browser P2P chat for GitHub Pages. No backend. Peers meet through public WebTorrent trackers or Nostr relays, then talk over WebRTC DataChannels.
 
-在线地址（合并并开启 Pages 后）：https://andyccr.github.io/ZenChat/
+部署在 GitHub Pages 上的无服务器 P2P 聊天室。没有后端。浏览器经公共 WebTorrent Tracker 或 Nostr 中继相遇，消息只走 WebRTC DataChannel。
 
----
-
-## 1. 技术选型：P2PT vs WebPEER / libp2p
-
-两条路径都能满足「不自建信令服务器」这一约束，但它们解决的问题半径不同。
-
-| | **P2PT / Trystero-torrent（WebTorrent）** | **WebPEER / js-libp2p** |
-|---|---|---|
-| 信令介质 | 公共 WebSocket Tracker。房间名被映射为 infohash，Tracker 只交换 offer/answer。 | 公共 bootstrap / 中继节点 + Identify / PubSub（或 WebPEER 的 `joinRoom`）。 |
-| 连接建立后的数据路径 | 浏览器 ↔ 浏览器 WebRTC DataChannel（DTLS） | 同样是浏览器 WebRTC DataChannel（libp2p 的 `webRTC` transport） |
-| 房间模型 | identifier / `appId + roomId` → 同一 swarm | namespace / pubsub topic |
-| 浏览器体积与复杂度 | 小，API 面窄，适合「聊天室」这种明确的房间语义 | 大（DHT、muxer、peer routing），接入成本高 |
-| 成熟的静态站先例 | [Chitchatter](https://chitchatter.im/)、[P2Chat](https://github.com/subins2000/p2chat)、[Board-IO](https://elvistony.github.io/board-io) | [WebPEER 聊天 demo](https://nuzulul.github.io/webpeerjs/demo/chat.html) |
-| 已知限制 | 公共 Tracker 数量少、会宕；对称 NAT 仍需要 TURN（这不是信令问题） | 依赖公共 bootstrap 的可达性；WebPEER 曾有约 1 条/秒的广播限速 |
-| 扩展方向 | 换 Tracker 列表、加 Nostr/MQTT 等平行信令策略 | DHT、跨语言节点、Circuit Relay，适合做成通用 P2P 应用平台 |
-
-**推荐：P2PT 这一路，并用 Trystero 的 BitTorrent 策略落地。**
-
-理由：
-
-1. 约束匹配。GitHub Pages 只能发静态文件；WebTorrent Tracker 已经是现成的、与应用无关的信令基础设施，不必也无法在 Pages 上跑 WebSocket 服务。
-2. 房间语义天然。一个字符串 identifier 就是一个聊天室，和「输入房间名即可相遇」完全同构。
-3. 可替换。把 Tracker 换成 Nostr 中继只改策略模块，上层协议（hello / chat / typing）不动。这比一上来绑死 libp2p 栈更利于演进。
-4. 何时再上 libp2p：需要浏览器节点与 Go/Rust 节点组网、内容寻址、或 Circuit Relay 时，再实现同一个 `SignallingTransport` 接口即可。
-
-ZenChat 因此采用：
-
-- 默认信令：`@trystero-p2p/torrent`（P2PT / WebTorrent Tracker）
-- 备选信令：`@trystero-p2p/nostr`（公共 Nostr 中继，同一套房间 API）
-- 传输：WebRTC DataChannel
-- ICE：仅公共 STUN。TURN 需要密钥签发，无法安全地做进纯静态站（见第 3 节）
+**Live / 在线：** https://andyccr.github.io/ZenChat/
 
 ---
 
-## 2. 核心实现：从初始化到第一条消息
+## Architecture / 架构
 
-下面是最小可用路径。完整工程把这些步骤拆进 `src/core/transports` 与 `src/core/session.ts`。
+```mermaid
+flowchart LR
+  subgraph UA["Browser A"]
+    UI[UI Shell]
+    RM[RoomManager]
+    CS[ChatSession]
+    TR[SignallingTransport]
+  end
 
-### 2.1 用公共 Tracker 发现同一房间的浏览器
+  subgraph Pub["Public infrastructure"]
+    WT[WebTorrent Trackers]
+    NS[Nostr Relays]
+    STUN[STUN]
+  end
 
-```ts
-import { joinRoom, selfId } from '@trystero-p2p/torrent'
+  subgraph UB["Browser B"]
+    DC[WebRTC DataChannel]
+  end
 
-const room = joinRoom(
-  {
-    appId: 'zenchat.andyccr.v1',
-    relayConfig: {
-      urls: [
-        'wss://tracker.webtorrent.dev',
-        'wss://tracker.openwebtorrent.com',
-        'wss://open.ftorrent.com:443',
-      ],
-    },
-    rtcConfig: {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun.cloudflare.com:3478' },
-      ],
-    },
-  },
-  'lobby', // 房间名 → swarm / infohash
-)
-
-console.log('local peer', selfId)
-room.onPeerJoin = (peerId) => console.log('connected', peerId)
+  UI --> RM --> CS --> TR
+  TR -->|"SDP / ICE (signalling only)"| WT
+  TR -->|"SDP / ICE (signalling only)"| NS
+  TR -->|"NAT discovery"| STUN
+  TR <-->|"DTLS messages"| DC
 ```
 
-等价的底层 P2PT 写法（同一条技术路径）：
+| Layer / 层 | Role / 职责 |
+|---|---|
+| UI Shell | Lobby, chat, room tabs, theme. Persistent; does not remount on switch. |
+| RoomManager | Fast room switch, local log cache, skip reconnect if same room. |
+| ChatSession | hello / chat / typing, incremental DOM, throttle typing, pause when hidden. |
+| Transport | `@trystero-p2p/torrent` (default) or `@trystero-p2p/nostr`. |
+| DataChannel | Encrypted chat after ICE succeeds. Trackers never see plaintext. |
 
-```js
-import P2PT from 'p2pt'
-
-const p2pt = new P2PT(
-  ['wss://tracker.webtorrent.dev', 'wss://tracker.openwebtorrent.com'],
-  'zenchat.andyccr.v1:lobby',
-)
-p2pt.on('peerconnect', (peer) => p2pt.send(peer, { type: 'hello', nick: '晚风' }))
-p2pt.on('msg', (peer, msg) => console.log(peer.id, msg))
-p2pt.start()
-```
-
-### 2.2 打开 DataChannel 上的应用协议
-
-```ts
-const chat = room.makeAction('zen')
-
-chat.onMessage = (data, { peerId }) => {
-  // data 已由库反序列化；ZenChat 再做版本与字段校验
-  console.log(peerId, data)
-}
-
-await chat.send({ v: 1, type: 'chat', id: 'aa11', ts: Date.now(), nick: '晚风', text: '你好' })
-```
-
-定向发给刚加入的节点：
-
-```ts
-room.onPeerJoin = async (peerId) => {
-  await chat.send({ v: 1, type: 'hello', nick: '晚风' }, { target: peerId })
-}
-```
-
-### 2.3 应用层约定（本仓库）
-
-- URL：`#/r/房间名?s=torrent|nostr`，可选 `k=` 口令
-- 口令参与 swarm 隔离，且交给 Trystero 做 SDP 加密；默认复制链接时不带出口令
-- 消息类型：`hello` / `chat` / `typing`，均带协议版本 `v: 1`
-- 身份：昵称存 `localStorage`，节点 id 存 `sessionStorage`（刷新同一标签页保持，关标签即换）
+扩展：再实现一个 `Libp2pTransport` 即可接到同一套 UI，不必改上层。
 
 ---
 
-## 3. 纯静态环境里的坑与对策
+## English
 
-| 问题 | 现象 | 对策 |
-|---|---|---|
-| 必须是安全上下文 | `http://` 非 localhost 下 WebRTC / Crypto 不可用 | 只用 GitHub Pages HTTPS，或 `vite` 的 localhost |
-| 项目站的 `base` | `https://user.github.io/ZenChat/` 下脚本 404 | `vite.config.ts` 在 `GITHUB_PAGES=true` 时使用 `/ZenChat/`；hash 路由避免 Pages 对子路径返回 404 |
-| Tracker 过少或宕机 | 信令指示灯不亮，永远 0 个节点 | 内置多条 `wss://` Tracker；UI 可切换 Nostr；`getRelaySockets()` 把每个中继的 `readyState` 暴露在状态栏 |
-| 对称 NAT / 公司网 / CGNAT | Tracker 已连上，但 DataChannel 起不来 | 这是 ICE 问题不是信令问题。纯静态站**不能**安全内嵌 TURN 密钥。同 Wi-Fi / 家用 NAT 通常可以；跨运营商失败时需自备 TURN，或接受「部分用户连不上」 |
-| Safari / iOS | 后台标签页冻结、部分 Tracker 被拦截 | 保持标签页前台；多 Tracker；必要时换 Nostr |
-| 全连接 Mesh 规模 | 房间一大，每对浏览器一条 WebRTC，O(n²) | 产品上按房间拆分；浏览器同时连接数有限，这是选「房间」而不是「全球大厅」的原因 |
-| 公共信令看见什么 | Tracker / 中继看得到对等节点标识和加密后的 SDP，看不到聊天正文 | 口令房间把 SDP 再加一层；不要把真正的秘密放进房间名 |
-| 浏览器刷新 | DataChannel 断开，消息不在服务器上 | 本设计即是瞬时的。不要假设历史会从网上拉回来 |
-| CSP / 混合内容 | `ws://` Tracker 被 Pages 的 HTTPS 拦截 | 只使用 `wss://` |
-| 依赖体积与 polyfill | 直接引 `p2pt` 时常需要 `Buffer` / `global` polyfill | 用 Trystero 的官方策略包，由 Vite 打包 |
+### Why this stack
 
----
+GitHub Pages can only host static files. WebRTC still needs signalling (SDP / ICE). ZenChat does **not** run its own signalling server. It reuses public P2P infrastructure:
 
-## 4. 已部署在 GitHub Pages 上的参考项目
+- **Default:** WebTorrent WebSocket trackers (the P2PT path, via Trystero).
+- **Fallback:** public Nostr relays, same app protocol.
+- **ICE:** public STUN only. TURN needs secrets, so it cannot be baked into a static site. Symmetric NAT may fail.
 
-1. **[Chitchatter](https://github.com/jeremyckahn/chitchatter)** — 线上 https://chitchatter.im/  
-   完整的无服务器聊天（文字 / 语音 / 文件），信令走 WebTorrent（Trystero），可选 TURN。是目前最接近「GitHub Pages 上的生产级 P2P 聊天」的参考实现。
+libp2p / WebPEER is heavier (DHT, muxers) and a better fit later if you need Go/Rust nodes or Circuit Relay.
 
-2. **[WebPEER chat demo](https://nuzulul.github.io/webpeerjs/demo/chat.html)**（源码 [nuzulul/webpeerjs](https://github.com/nuzulul/webpeerjs)）  
-   libp2p 路线的最小聊天室，适合对照 `joinRoom` / `broadcast` API。另可看 [Board-IO](https://elvistony.github.io/board-io)（P2PT 白板）作为更轻的 Pages 部署样本。
-
----
-
-## 本地运行与部署
+### Use
 
 ```bash
 npm install
@@ -150,36 +68,76 @@ npm test
 npm run dev
 ```
 
-打开两个浏览器窗口，进入同一房间名即可互发。顶栏房间标签或 `Ctrl/Cmd+K` 可快速切换聊天室。输入框旁「顔」可插入颜文字和表情。主题按钮在「跟随系统 / 白天 / 黑夜」之间循环。
+Open two windows, join the same room. Top tabs or `Ctrl/Cmd+K` switch rooms. 「顔」 inserts kaomoji/emoji. Theme cycles Auto / Light / Dark.
 
-GitHub Pages（当前仓库是 **Deploy from a branch: `main` / **，不要只提交 Vite 源码）：
+On a phone, nickname + room + **Join** sit above the fold. Chat uses a fixed viewport: the composer stays on screen (including when the keyboard opens via `visualViewport`). Members are a sheet, not a second column you have to scroll past.
 
-1. 源码入口在 `src/index.html`。`npm run build:pages` 会编译出浏览器能跑的 `index.html` + `assets/` 放到仓库根目录。
-2. 合并到 `main` 后，GitHub 会直接托管这些静态文件；Actions 也会在 `main` 上自动再编译一次并回写。
-3. 打开 https://andyccr.github.io/ZenChat/ 或 https://andyccr.com/ZenChat/ （需 HTTPS，WebRTC 才可用）。
+### Deploy
+
+This repo’s Pages setting is **Deploy from a branch: `main` / **. Do not serve the Vite source HTML.
+
+1. Source entry is `src/index.html`. `npm run build:pages` writes compiled `index.html` + `assets/` at the repo root.
+2. After merge, GitHub serves those files. An Action on `main` rebuilds and commits if needed.
+3. Open https://andyccr.github.io/ZenChat/ over **HTTPS**.
+
+### Pitfalls
+
+| Issue | What to do |
+|---|---|
+| Insecure context | HTTPS or localhost only |
+| Project-site `base` | Production build uses `/ZenChat/` |
+| Dead trackers | Several `wss://` URLs; switch to Nostr in the UI |
+| Symmetric NAT | No TURN on a static host; same LAN usually works |
+| Mesh scale | One WebRTC link per pair — keep rooms small |
+
+References: [Chitchatter](https://chitchatter.im/), [WebPEER demo](https://nuzulul.github.io/webpeerjs/demo/chat.html).
 
 ---
 
-## 架构
+## 中文
 
+### 为什么这样选
+
+GitHub Pages 只能托管静态文件。WebRTC 仍需要信令。ZenChat **不自建**信令服务，只复用公共 P2P 设施：
+
+- **默认：** WebTorrent WebSocket Tracker（P2PT / Trystero）
+- **备选：** 公共 Nostr 中继，同一套应用协议
+- **ICE：** 仅公共 STUN。TURN 需要密钥，不能安全写进纯静态站；对称 NAT 可能连不上。
+
+libp2p / WebPEER 更重，适合以后要和 Go/Rust 节点组网或 Circuit Relay 时再接。
+
+### 使用
+
+```bash
+npm install
+npm test
+npm run dev
 ```
-UI (lobby / chat / theme)
-        │
-        ▼
- RoomManager   快切房间、本地日志缓存、同房去重
-        │
-        ▼
- ChatSession   增量消息、节流输入、后台暂停心跳
-        │
-        ▼
- SignallingTransport 接口
-   ├─ Trystero torrent   公共 WebTorrent Tracker
-   └─ Trystero nostr     公共 Nostr 中继
-        │
-        ▼
- WebRTC DataChannel  ← 真正的消息通道
-```
 
-扩展点：再写一个 `Libp2pTransport implements SignallingTransport`，不必改 UI。
+两个窗口进同一房间即可互发。顶栏标签或 `Ctrl/Cmd+K` 切房间。「顔」插入颜文字/表情。主题：自动 / 浅色 / 深色。
 
-许可：GNU AGPL v3。界面提供源码链接以满足网络交互条款。
+手机上：昵称、房间、**加入**都在首屏，不用下滑。聊天是固定视口，输入框钉在底部（键盘弹出时用 `visualViewport` 收缩高度）。成员列表是浮层，不会把输入框顶出屏幕。
+
+### 部署
+
+当前 Pages 是 **从 `main` 根目录发布**。不要只上传 Vite 源码里的 `index.html`。
+
+1. 源码入口 `src/index.html`。`npm run build:pages` 把可运行的 `index.html` 和 `assets/` 写到仓库根目录。
+2. 合并后 GitHub 直接托管这些文件；`main` 上的 Action 也会再编译并回写。
+3. 用 **HTTPS** 打开 https://andyccr.github.io/ZenChat/
+
+### 注意
+
+| 问题 | 对策 |
+|---|---|
+| 非安全上下文 | 只用 HTTPS 或 localhost |
+| 项目站路径 | 生产构建 `base` 为 `/ZenChat/` |
+| Tracker 宕机 | 多条 `wss://`；界面可切 Nostr |
+| 对称 NAT | 静态站没有 TURN；同一局域网通常可以 |
+| Mesh 规模 | 每对浏览器一条连接，用房间拆分 |
+
+参考：[Chitchatter](https://chitchatter.im/)、[WebPEER demo](https://nuzulul.github.io/webpeerjs/demo/chat.html)。
+
+---
+
+License: GNU AGPL v3. The UI links to source to satisfy the network-interaction clause.

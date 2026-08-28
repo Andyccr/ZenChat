@@ -10,6 +10,7 @@ type StrategyModule = {
       appId: string
       password?: string
       rtcConfig: RTCConfiguration
+      trickleIce?: boolean
       relayConfig: { urls: string[] }
     },
     roomId: string,
@@ -50,6 +51,7 @@ export class TrysteroTransport implements SignallingTransport {
         appId: options.appId,
         ...(options.password ? { password: options.password } : {}),
         rtcConfig: RTC_CONFIG,
+        trickleIce: true,
         relayConfig: {
           urls: relayUrls,
         },
@@ -130,10 +132,6 @@ async function loadStrategy(strategy: SignalStrategy): Promise<StrategyModule> {
 }
 
 export function preloadStrategies(): void {
-  const run = () => {
-    void loadStrategy('torrent')
-    void loadStrategy('nostr')
-  }
-  if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 1500 })
-  else setTimeout(run, 300)
+  void loadStrategy('torrent')
+  void loadStrategy('nostr')
 }
