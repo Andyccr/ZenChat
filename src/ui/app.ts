@@ -9,7 +9,7 @@ import { copy } from './copy'
 import { el, empty, hostOf, wsLabel } from './dom'
 import { LogView } from './log-view'
 import { StampPicker } from './picker'
-import { applyTheme, cycleTheme, loadThemePreference, persistThemePreference } from './theme'
+import { applyTheme, cycleTheme, loadThemePreference, persistThemePreference, themeLabel } from './theme'
 
 function webrtcReady(): boolean {
   return typeof RTCPeerConnection === 'function'
@@ -37,7 +37,7 @@ export class App {
     this.root = root
     this.theme = loadThemePreference()
     applyTheme(this.theme)
-    this.themeBtn = el('button', { class: 'btn ghost', type: 'button', title: '主题' }, [themeIcon(this.theme)])
+    this.themeBtn = el('button', { class: 'btn ghost', type: 'button', title: '主题' }, [themeLabel(this.theme)])
     this.tabsEl = el('nav', { class: 'tabs', 'aria-label': copy.recent })
     this.toolsEl = el('div', { class: 'toolbar' })
     this.main = el('main', { class: 'main' })
@@ -81,7 +81,7 @@ export class App {
       this.theme = cycleTheme(this.theme)
       persistThemePreference(this.theme)
       applyTheme(this.theme)
-      this.themeBtn.textContent = themeIcon(this.theme)
+      this.themeBtn.textContent = themeLabel(this.theme)
     })
     void this.route()
   }
@@ -93,6 +93,7 @@ export class App {
           el('a', { class: 'brand', href: '#/' }, [
             el('div', { class: 'enso', 'aria-hidden': 'true' }),
             el('strong', {}, [copy.title]),
+            el('span', { class: 'tagline' }, [copy.tagline]),
           ]),
           this.tabsEl,
           this.toolsEl,
@@ -234,7 +235,7 @@ export class App {
         strategy: strategy.value as SignalStrategy,
       })
     })
-    return form
+    return el('div', { class: 'lobby' }, [el('p', { class: 'lede' }, [copy.lobbyHint]), form])
   }
 
   private refreshTabs(active?: RoomSpec): void {
@@ -397,12 +398,6 @@ class ChatPane {
 
 function field(label: string, control: HTMLElement): HTMLElement {
   return el('label', { class: 'field' }, [el('span', {}, [label]), control])
-}
-
-function themeIcon(pref: ThemePreference): string {
-  if (pref === 'light') return '浅色'
-  if (pref === 'dark') return '深色'
-  return '自动'
 }
 
 function specFromRecent(item: RecentRoom, active?: RoomSpec): RoomSpec {
