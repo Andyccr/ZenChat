@@ -7,9 +7,10 @@ describe('identity helpers', () => {
     expect(sanitizeNick('x'.repeat(40)).length).toBe(24)
   })
 
-  it('maps ids to a stable fallback nick and color', () => {
+  it('maps ids to a stable fallback nick and earth-tone color', () => {
     expect(defaultNick('abcd')).toBe(defaultNick('abcd'))
-    expect(colorFromId('peer-a')).toMatch(/^hsl\(\d+ 42% 46%\)$/)
-    expect(colorFromId('peer-a')).not.toBe(colorFromId('peer-b'))
+    expect(colorFromId('peer-a')).toMatch(/^#[0-9a-f]{6}$/)
+    expect(colorFromId('peer-a')).toBe(colorFromId('peer-a'))
+    expect(new Set(['peer-a', 'peer-b', 'peer-c', 'peer-d', 'peer-e'].map(colorFromId)).size).toBeGreaterThan(1)
   })
 })
