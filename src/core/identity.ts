@@ -21,14 +21,15 @@ export function randomHex(bytes: number): string {
   return [...buf].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+const EARTH_COLORS = ['#c15f3c', '#8b5e3c', '#5c6b4a', '#6b4f3a', '#9a6b3f', '#4a6b62', '#7a4e3a', '#5a5568']
+
 export function colorFromId(id: string): string {
   let hash = 2166136261
   for (let i = 0; i < id.length; i += 1) {
     hash ^= id.charCodeAt(i)
     hash = Math.imul(hash, 16777619)
   }
-  const hue = Math.abs(hash) % 360
-  return `hsl(${hue} 42% 46%)`
+  return EARTH_COLORS[Math.abs(hash) % EARTH_COLORS.length] ?? '#c15f3c'
 }
 
 export function sanitizeNick(raw: string): string {
