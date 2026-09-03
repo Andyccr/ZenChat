@@ -6,6 +6,7 @@ export const MAX_ROOM_LENGTH = 64
 export const MAX_MESSAGE_LENGTH = 4000
 export const MAX_RECENT_ROOMS = 10
 export const MAX_LOG_LINES = 200
+export const MAX_SEEN_IDS = MAX_LOG_LINES * 2
 export const DEFAULT_ROOM = 'lobby'
 export const TYPING_TTL_MS = 2500
 export const TYPING_THROTTLE_MS = 1800

@@ -1,5 +1,5 @@
 export function throttle<T extends unknown[]>(fn: (...args: T) => void, ms: number): (...args: T) => void {
-  let last = 0
+  let last = Number.NEGATIVE_INFINITY
   return (...args: T) => {
     const now = Date.now()
     if (now - last < ms) return
@@ -9,6 +9,9 @@ export function throttle<T extends unknown[]>(fn: (...args: T) => void, ms: numb
 }
 
 export function rafBatch<T extends unknown[]>(fn: (...args: T) => void): (...args: T) => void {
+  if (typeof requestAnimationFrame !== 'function') {
+    return (...args: T) => fn(...args)
+  }
   let token = 0
   let pending: T | null = null
   return (...args: T) => {
@@ -22,3 +25,4 @@ export function rafBatch<T extends unknown[]>(fn: (...args: T) => void): (...arg
     })
   }
 }
+

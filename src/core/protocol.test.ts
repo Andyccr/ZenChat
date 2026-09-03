@@ -22,4 +22,12 @@ describe('parsePayload', () => {
     })
     expect(parsed).toMatchObject({ type: 'hello', nick: '甲 乙' })
   })
+
+  it('accepts typing payloads', () => {
+    expect(parsePayload({ v: 1, type: 'typing', nick: '听雨' })).toEqual({
+      v: 1,
+      type: 'typing',
+      nick: '听雨',
+    })
+  })
 })

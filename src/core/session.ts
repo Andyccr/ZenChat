@@ -1,6 +1,6 @@
-import { APP_ID, HELLO_INTERVAL_MS, RELAY_POLL_MS, TYPING_THROTTLE_MS, TYPING_TTL_MS } from '../config/app'
-import { trimLines } from './cache'
+import { APP_ID, HELLO_INTERVAL_MS, RELAY_POLL_MS, TYPING_THROTTLE_MS } from '../config/app'
 import { randomHex } from './identity'
+import { Presence } from './presence'
 import {
   createChatPayload,
   createHelloPayload,
@@ -8,8 +8,10 @@ import {
   parsePayload,
 } from './protocol'
 import { normalizeRoomName, roomNamespace } from './room'
+import { browserRuntime, type Runtime } from './runtime'
 import { rafBatch, throttle } from './scheduler'
-import { TrysteroTransport } from './transports/trystero'
+import { chatLine, systemLine, Transcript } from './transcript'
+import { createTransport, type TransportFactory } from './transports/create'
 import type { SignallingTransport } from './transports/types'
 import type { ChatLine, Identity, Member, RoomSpec, SessionStatus } from './types'
 
@@ -20,17 +22,22 @@ export type SessionListener = {
   onReset?: (lines: ChatLine[]) => void
 }
 
+export type SessionOptions = {
+  createTransport?: TransportFactory
+  runtime?: Runtime
+}
+
 export class ChatSession {
   private transport: SignallingTransport
   private identity: Identity
-  private members = new Map<string, Member>()
-  private lines: ChatLine[] = []
-  private seen = new Set<string>()
   private listeners: SessionListener
+  private createTransport: TransportFactory
+  private runtime: Runtime
+  private transcript = new Transcript()
+  private presence: Presence
   private helloTimer: number | null = null
   private relayTimer: number | null = null
-  private typingTimers = new Map<string, number>()
-  private paused = false
+  private unbindVisibility: (() => void) | null = null
   private joined = false
   private status: SessionStatus = {
     phase: 'idle',
@@ -40,38 +47,42 @@ export class ChatSession {
   }
 
   private readonly emitMembers = rafBatch(() => {
-    this.listeners.onMembers?.([...this.members.values()].sort((a, b) => a.joinedAt - b.joinedAt))
+    this.listeners.onMembers?.(this.presence.list())
   })
 
   private readonly sendTypingThrottled = throttle(() => {
+    if (!this.joined) return
     void this.transport.send(createTypingPayload(this.identity.nick))
   }, TYPING_THROTTLE_MS)
 
-  constructor(identity: Identity, listeners: SessionListener, transport?: SignallingTransport) {
+  constructor(identity: Identity, listeners: SessionListener, options: SessionOptions = {}) {
     this.identity = identity
     this.listeners = listeners
-    this.transport = transport ?? new TrysteroTransport('torrent')
+    this.createTransport = options.createTransport ?? createTransport
+    this.runtime = options.runtime ?? browserRuntime
+    this.transport = this.createTransport('torrent')
+    this.presence = new Presence(this.runtime, () => this.emitMembers())
   }
 
   get selfId(): string {
     return this.transport.selfId() || this.identity.id
   }
 
+  isJoined(): boolean {
+    return this.joined
+  }
+
   getLines(): ChatLine[] {
-    return this.lines
+    return this.transcript.snapshot()
   }
 
   hydrate(lines: ChatLine[]): void {
-    this.lines = trimLines(lines)
-    for (const line of this.lines) {
-      if (line.kind === 'chat') this.seen.add(line.id)
-    }
-    this.listeners.onReset?.(this.lines)
+    this.listeners.onReset?.(this.transcript.hydrate(lines))
   }
 
   async join(spec: RoomSpec): Promise<void> {
     if (this.joined) await this.leave({ silent: true })
-    this.transport = new TrysteroTransport(spec.strategy)
+    this.transport = this.createTransport(spec.strategy)
     this.joined = true
     this.setStatus({
       phase: 'connecting',
@@ -80,36 +91,42 @@ export class ChatSession {
       peerCount: 0,
     })
 
-    await this.transport.join(
-      {
-        appId: APP_ID,
-        roomId: roomNamespace({ name: normalizeRoomName(spec.name), password: spec.password }),
-        password: spec.password,
-        strategy: spec.strategy,
-      },
-      {
-        onPeerJoin: (peerId) => {
-          this.upsertMember(peerId, '访客')
-          this.pushSystem(`${peerId.slice(0, 6)} 加入了房间`)
-          void this.transport.send(createHelloPayload(this.identity.nick), peerId)
-          this.emitMembers()
-          this.refreshStatus('connected', `直连 ${this.transport.peerIds().length}`)
-          window.setTimeout(() => void this.measure(peerId), 350)
+    try {
+      await this.transport.join(
+        {
+          appId: APP_ID,
+          roomId: roomNamespace({ name: normalizeRoomName(spec.name), password: spec.password }),
+          password: spec.password,
+          strategy: spec.strategy,
         },
-        onPeerLeave: (peerId) => {
-          const member = this.members.get(peerId)
-          this.members.delete(peerId)
-          this.pushSystem(`${member?.nick ?? peerId.slice(0, 6)} 离开了房间`)
-          this.emitMembers()
-          const n = this.transport.peerIds().length
-          this.refreshStatus(n > 0 ? 'connected' : 'connecting', n > 0 ? `直连 ${n}` : '等待同伴')
+        {
+          onPeerJoin: (peerId) => {
+            this.presence.upsert(peerId, '访客')
+            this.pushSystem(`${peerId.slice(0, 6)} 加入了房间`)
+            void this.transport.send(createHelloPayload(this.identity.nick), peerId)
+            this.emitMembers()
+            this.refreshStatus('connected', `直连 ${this.transport.peerIds().length}`)
+            this.runtime.setTimeout(() => void this.measure(peerId), 350)
+          },
+          onPeerLeave: (peerId) => {
+            const member = this.presence.remove(peerId)
+            this.pushSystem(`${member?.nick ?? peerId.slice(0, 6)} 离开了房间`)
+            this.emitMembers()
+            const n = this.transport.peerIds().length
+            this.refreshStatus(n > 0 ? 'connected' : 'connecting', n > 0 ? `直连 ${n}` : '等待同伴')
+          },
+          onPayload: (peerId, payload) => this.handlePayload(peerId, payload),
+          onJoinError: (detail) => {
+            this.refreshStatus('connecting', `握手受阻：${detail}`)
+          },
         },
-        onPayload: (peerId, payload) => this.handlePayload(peerId, payload),
-        onJoinError: (detail) => {
-          this.refreshStatus('connecting', `握手受阻：${detail}`)
-        },
-      },
-    )
+      )
+    } catch (error) {
+      this.joined = false
+      const detail = error instanceof Error ? error.message : '连接失败'
+      this.refreshStatus('error', `无法启动 P2P：${detail}`)
+      throw error
+    }
 
     this.bindVisibility()
     this.startTimers()
@@ -117,18 +134,19 @@ export class ChatSession {
   }
 
   async sendChat(text: string): Promise<void> {
-    const payload = createChatPayload(this.identity.nick, text, randomHex(8), Date.now())
+    if (!this.joined) return
+    const payload = createChatPayload(this.identity.nick, text, randomHex(8), this.runtime.now())
     if (!payload.text) return
-    this.seen.add(payload.id)
-    this.pushLine({
-      kind: 'chat',
-      id: payload.id,
-      fromId: this.selfId,
-      nick: this.identity.nick,
-      text: payload.text,
-      ts: payload.ts,
-      self: true,
-    })
+    this.pushLine(
+      chatLine({
+        id: payload.id,
+        fromId: this.selfId,
+        nick: this.identity.nick,
+        text: payload.text,
+        ts: payload.ts,
+        self: true,
+      }),
+    )
     void this.transport.send(payload)
   }
 
@@ -138,19 +156,17 @@ export class ChatSession {
 
   setNick(nick: string): void {
     this.identity = { ...this.identity, nick }
-    void this.transport.send(createHelloPayload(nick))
+    if (this.joined) void this.transport.send(createHelloPayload(nick))
   }
 
   async leave(options: { silent?: boolean } = {}): Promise<void> {
     this.joined = false
-    this.unbindVisibility()
+    this.unbindVisibility?.()
+    this.unbindVisibility = null
     this.stopTimers()
-    for (const timer of this.typingTimers.values()) window.clearTimeout(timer)
-    this.typingTimers.clear()
+    this.presence.clear()
     await this.transport.leave()
-    this.members.clear()
-    this.lines = []
-    this.seen.clear()
+    this.transcript.clear()
     if (!options.silent) {
       this.setStatus({ phase: 'idle', detail: '已离开房间', relays: [], peerCount: 0 })
       this.emitMembers()
@@ -161,7 +177,7 @@ export class ChatSession {
   private handlePayload(peerId: string, raw: unknown): void {
     const payload = parsePayload(raw)
     if (!payload) return
-    this.upsertMember(peerId, payload.nick)
+    this.presence.upsert(peerId, payload.nick)
 
     if (payload.type === 'hello') {
       this.emitMembers()
@@ -169,77 +185,42 @@ export class ChatSession {
     }
 
     if (payload.type === 'typing') {
-      this.setTyping(peerId)
+      this.presence.markTyping(peerId)
       this.emitMembers()
       return
     }
 
-    if (this.seen.has(payload.id)) return
-    this.seen.add(payload.id)
-    this.pushLine({
-      kind: 'chat',
-      id: payload.id,
-      fromId: peerId,
-      nick: payload.nick,
-      text: payload.text,
-      ts: payload.ts,
-      self: false,
-    })
+    if (this.transcript.has(payload.id)) return
+    this.pushLine(
+      chatLine({
+        id: payload.id,
+        fromId: peerId,
+        nick: payload.nick,
+        text: payload.text,
+        ts: payload.ts,
+        self: false,
+      }),
+    )
     this.emitMembers()
   }
 
-  private upsertMember(id: string, nick: string): void {
-    const existing = this.members.get(id)
-    const now = Date.now()
-    this.members.set(id, {
-      id,
-      nick,
-      joinedAt: existing?.joinedAt ?? now,
-      lastSeenAt: now,
-      rttMs: existing?.rttMs ?? null,
-      typing: existing?.typing ?? false,
-    })
-  }
-
-  private setTyping(peerId: string): void {
-    const member = this.members.get(peerId)
-    if (!member) return
-    member.typing = true
-    const previous = this.typingTimers.get(peerId)
-    if (previous) window.clearTimeout(previous)
-    this.typingTimers.set(
-      peerId,
-      window.setTimeout(() => {
-        const current = this.members.get(peerId)
-        if (current) {
-          current.typing = false
-          this.emitMembers()
-        }
-      }, TYPING_TTL_MS),
-    )
-  }
-
   private async measure(peerId: string): Promise<void> {
+    if (!this.joined) return
     try {
       const rtt = await this.transport.ping(peerId)
-      const member = this.members.get(peerId)
-      if (member) {
-        member.rttMs = rtt
-        this.emitMembers()
-      }
+      if (this.joined && this.presence.setRtt(peerId, rtt)) this.emitMembers()
     } catch {
       // Ping can fail during ICE restart; presence still stands.
     }
   }
 
   private pushSystem(text: string): void {
-    this.pushLine({ kind: 'system', id: randomHex(6), text, ts: Date.now() })
+    this.pushLine(systemLine(randomHex(6), text, this.runtime.now()))
   }
 
   private pushLine(line: ChatLine): void {
-    this.lines.push(line)
-    this.lines = trimLines(this.lines)
-    this.listeners.onLine?.(line)
+    const accepted = this.transcript.append(line)
+    if (accepted) this.listeners.onLine?.(accepted)
   }
 
   private refreshStatus(phase: SessionStatus['phase'], detail: string): void {
@@ -267,37 +248,33 @@ export class ChatSession {
   }
 
   private onVisibility = (): void => {
-    if (document.hidden) this.stopTimers()
+    if (this.runtime.hidden()) this.stopTimers()
     else if (this.joined) this.startTimers()
   }
 
   private bindVisibility(): void {
-    document.addEventListener('visibilitychange', this.onVisibility)
-  }
-
-  private unbindVisibility(): void {
-    document.removeEventListener('visibilitychange', this.onVisibility)
+    this.unbindVisibility?.()
+    this.unbindVisibility = this.runtime.onVisibilityChange(this.onVisibility)
   }
 
   private startTimers(): void {
     this.stopTimers()
-    this.helloTimer = window.setInterval(() => {
-      if (!this.paused) void this.transport.send(createHelloPayload(this.identity.nick))
+    this.helloTimer = this.runtime.setInterval(() => {
+      void this.transport.send(createHelloPayload(this.identity.nick))
     }, HELLO_INTERVAL_MS)
-    this.relayTimer = window.setInterval(() => {
+    this.relayTimer = this.runtime.setInterval(() => {
       this.refreshStatus(this.status.phase, this.status.detail)
     }, RELAY_POLL_MS)
   }
 
   private stopTimers(): void {
     if (this.helloTimer !== null) {
-      window.clearInterval(this.helloTimer)
+      this.runtime.clearInterval(this.helloTimer)
       this.helloTimer = null
     }
     if (this.relayTimer !== null) {
-      window.clearInterval(this.relayTimer)
+      this.runtime.clearInterval(this.relayTimer)
       this.relayTimer = null
     }
-    this.paused = document.hidden
   }
 }
