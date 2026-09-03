@@ -16,6 +16,8 @@ flowchart LR
     UI[UI Shell]
     RM[RoomManager]
     CS[ChatSession]
+    P[Presence]
+    L[Transcript]
     TR[SignallingTransport]
   end
 
@@ -29,7 +31,11 @@ flowchart LR
     DC[WebRTC DataChannel]
   end
 
-  UI --> RM --> CS --> TR
+  UI --> RM --> CS
+  CS --> P[Presence]
+  CS --> L[Transcript]
+  CS --> TR
+
   TR -->|"SDP / ICE (signalling only)"| WT
   TR -->|"SDP / ICE (signalling only)"| NS
   TR -->|"NAT discovery"| STUN
@@ -38,13 +44,12 @@ flowchart LR
 
 | Layer / 层 | Role / 职责 |
 |---|---|
-| UI Shell | Lobby, chat, room tabs, theme. Persistent; does not remount on switch. |
-| RoomManager | Fast room switch, local log cache, skip reconnect if same room. |
-| ChatSession | hello / chat / typing, incremental DOM, throttle typing, pause when hidden. |
-| Transport | `@trystero-p2p/torrent` (default) or `@trystero-p2p/nostr`. |
+| UI Shell | Lobby, tabs, theme. Chat pane is a separate view; shell does not remount on switch. |
+| RoomManager | Room lifecycle, log cache, skip reconnect if the same room is already joined. |
+| ChatSession | Orchestrates hello / chat / typing over an injected transport and runtime. |
+| Presence / Transcript | Members + typing TTL; capped message log and dedupe ids. |
+| Transport factory | Default Trystero torrent/nostr. Tests inject a fake. A `Libp2pTransport` can plug in here. |
 | DataChannel | Encrypted chat after ICE succeeds. Trackers never see plaintext. |
-
-扩展：再实现一个 `Libp2pTransport` 即可接到同一套 UI，不必改上层。
 
 ---
 
