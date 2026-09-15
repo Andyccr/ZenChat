@@ -51,3 +51,5 @@ export type SessionStatus = {
   relays: RelayStatus[]
   peerCount: number
 }
+
+export type SendResult = 'sent' | 'empty' | 'closed' | 'failed'

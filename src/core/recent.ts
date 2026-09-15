@@ -1,5 +1,6 @@
 import { MAX_RECENT_ROOMS } from '../config/app'
-import { recentRoomKey } from './room'
+import { normalizeRoomName, recentRoomKey } from './room'
+import { recallSecret } from './secrets'
 import type { RoomSpec } from './types'
 
 const KEY = 'zenchat.recentRooms'
@@ -45,4 +46,14 @@ export function rememberRoom(spec: RoomSpec): RecentRoom[] {
   const list = [next, ...others].slice(0, MAX_RECENT_ROOMS)
   localStorage.setItem(KEY, JSON.stringify(list))
   return list
+}
+
+export function specFromRecent(item: RecentRoom, active?: RoomSpec): RoomSpec | 'need-password' {
+  const stored = recallSecret(item)
+  const sameActive = Boolean(
+    active && normalizeRoomName(item.name) === normalizeRoomName(active.name) && item.strategy === active.strategy,
+  )
+  const password = (sameActive ? active?.password ?? '' : '') || stored
+  if (item.hasPassword && !password) return 'need-password'
+  return { name: item.name, password, strategy: item.strategy }
 }

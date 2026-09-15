@@ -11,6 +11,10 @@ export class LogView {
     this.el = el('div', { class: 'log', role: 'log', 'aria-live': 'polite' })
   }
 
+  get size(): number {
+    return this.ids.size
+  }
+
   reset(lines: ChatLine[]): void {
     this.el.replaceChildren()
     this.ids.clear()

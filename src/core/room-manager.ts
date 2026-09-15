@@ -31,8 +31,8 @@ export class RoomManager {
     this.session?.setNick(identity.nick)
   }
 
-  async open(spec: RoomSpec): Promise<ChatSession | null> {
-    if (this.spec && this.session?.isJoined() && sameRoom(this.spec, spec)) {
+  async open(spec: RoomSpec, force = false): Promise<ChatSession | null> {
+    if (!force && this.spec && this.session?.isJoined() && sameRoom(this.spec, spec)) {
       return this.session
     }
 
@@ -68,6 +68,10 @@ export class RoomManager {
   async close(): Promise<void> {
     this.generation += 1
     await this.snapshotAndClose()
+  }
+
+  snapshot(): void {
+    if (this.session && this.spec) saveRoomLog(this.spec, this.session.getLines())
   }
 
   private async snapshotAndClose(): Promise<void> {
