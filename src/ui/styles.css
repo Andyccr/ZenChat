@@ -347,11 +347,78 @@ textarea:focus-visible {
 }
 
 .status-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   min-height: 28px;
+}
+
+.status-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.btn.compact {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.vacant {
+  margin: 24px auto;
+  max-width: 22em;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.vacant[hidden] {
+  display: none !important;
+}
+
+.lock {
+  margin-left: 4px;
+  font-size: 10px;
+  color: var(--accent-deep);
+}
+
+.tips {
+  margin: 0 0 4px;
+  padding-left: 1.2em;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.banner.warn {
+  color: var(--accent-deep);
+}
+
+.dot.err {
+  background: var(--danger);
+}
+
+.nick-label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.nick-edit {
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--hair);
+  padding: 2px 0;
 }
 
 .status {

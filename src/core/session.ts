@@ -10,10 +10,17 @@ import {
 import { normalizeRoomName, roomNamespace } from './room'
 import { browserRuntime, type Runtime } from './runtime'
 import { rafBatch, throttle } from './scheduler'
+import {
+  connectedDetail,
+  connectingDetail,
+  startFailedDetail,
+  STATUS_COPY,
+  waitingOrDown,
+} from './status'
 import { chatLine, systemLine, Transcript } from './transcript'
 import { createTransport, type TransportFactory } from './transports/create'
 import type { SignallingTransport } from './transports/types'
-import type { ChatLine, Identity, Member, RoomSpec, SessionStatus } from './types'
+import type { ChatLine, Identity, Member, RoomSpec, SendResult, SessionStatus, SignalStrategy } from './types'
 
 export type SessionListener = {
   onStatus?: (status: SessionStatus) => void
@@ -39,9 +46,11 @@ export class ChatSession {
   private relayTimer: number | null = null
   private unbindVisibility: (() => void) | null = null
   private joined = false
+  private strategy: SignalStrategy = 'torrent'
+  private joinErrors = 0
   private status: SessionStatus = {
     phase: 'idle',
-    detail: '尚未连接',
+    detail: STATUS_COPY.idle,
     relays: [],
     peerCount: 0,
   }
@@ -82,11 +91,13 @@ export class ChatSession {
 
   async join(spec: RoomSpec): Promise<void> {
     if (this.joined) await this.leave({ silent: true })
+    this.strategy = spec.strategy
+    this.joinErrors = 0
     this.transport = this.createTransport(spec.strategy)
     this.joined = true
     this.setStatus({
       phase: 'connecting',
-      detail: spec.strategy === 'torrent' ? '正在连接 Tracker…' : '正在连接 Nostr…',
+      detail: connectingDetail(spec.strategy),
       relays: [],
       peerCount: 0,
     })
@@ -105,38 +116,41 @@ export class ChatSession {
             this.pushSystem(`${peerId.slice(0, 6)} 加入了房间`)
             void this.transport.send(createHelloPayload(this.identity.nick), peerId)
             this.emitMembers()
-            this.refreshStatus('connected', `直连 ${this.transport.peerIds().length}`)
+            this.syncStatus()
             this.runtime.setTimeout(() => void this.measure(peerId), 350)
           },
           onPeerLeave: (peerId) => {
             const member = this.presence.remove(peerId)
             this.pushSystem(`${member?.nick ?? peerId.slice(0, 6)} 离开了房间`)
             this.emitMembers()
-            const n = this.transport.peerIds().length
-            this.refreshStatus(n > 0 ? 'connected' : 'connecting', n > 0 ? `直连 ${n}` : '等待同伴')
+            this.syncStatus()
           },
           onPayload: (peerId, payload) => this.handlePayload(peerId, payload),
-          onJoinError: (detail) => {
-            this.refreshStatus('connecting', `握手受阻：${detail}`)
+          onJoinError: () => {
+            this.joinErrors += 1
+            if (this.transport.peerIds().length > 0) return
+            if (this.joinErrors >= 3) this.syncStatus(true)
+            else this.refreshStatus('connecting', STATUS_COPY.handshake)
           },
         },
       )
     } catch (error) {
       this.joined = false
       const detail = error instanceof Error ? error.message : '连接失败'
-      this.refreshStatus('error', `无法启动 P2P：${detail}`)
+      this.refreshStatus('error', startFailedDetail(detail))
       throw error
     }
 
     this.bindVisibility()
     this.startTimers()
-    this.refreshStatus('connecting', '已宣布，等待对等节点')
+    void this.transport.send(createHelloPayload(this.identity.nick))
+    this.syncStatus()
   }
 
-  async sendChat(text: string): Promise<void> {
-    if (!this.joined) return
+  async sendChat(text: string): Promise<SendResult> {
+    if (!this.joined) return 'closed'
     const payload = createChatPayload(this.identity.nick, text, randomHex(8), this.runtime.now())
-    if (!payload.text) return
+    if (!payload.text) return 'empty'
     this.pushLine(
       chatLine({
         id: payload.id,
@@ -147,7 +161,13 @@ export class ChatSession {
         self: true,
       }),
     )
-    void this.transport.send(payload)
+    try {
+      await this.transport.send(payload)
+      return 'sent'
+    } catch {
+      this.pushSystem(STATUS_COPY.sendFailed)
+      return 'failed'
+    }
   }
 
   sendTyping(): void {
@@ -168,7 +188,7 @@ export class ChatSession {
     await this.transport.leave()
     this.transcript.clear()
     if (!options.silent) {
-      this.setStatus({ phase: 'idle', detail: '已离开房间', relays: [], peerCount: 0 })
+      this.setStatus({ phase: 'idle', detail: STATUS_COPY.left, relays: [], peerCount: 0 })
       this.emitMembers()
       this.listeners.onReset?.([])
     }
@@ -223,6 +243,19 @@ export class ChatSession {
     if (accepted) this.listeners.onLine?.(accepted)
   }
 
+  private syncStatus(forceError = false): void {
+    const peerCount = this.transport.peerIds().length
+    const relays = this.transport.relays()
+    if (peerCount > 0) {
+      this.setStatus({ phase: 'connected', detail: connectedDetail(peerCount), relays, peerCount })
+      return
+    }
+    const next = forceError
+      ? waitingOrDown(this.strategy, relays.length ? relays : [{ url: 'local', readyState: 3 }])
+      : waitingOrDown(this.strategy, relays)
+    this.setStatus({ ...next, relays, peerCount: 0 })
+  }
+
   private refreshStatus(phase: SessionStatus['phase'], detail: string): void {
     this.setStatus({
       phase,
@@ -248,8 +281,14 @@ export class ChatSession {
   }
 
   private onVisibility = (): void => {
-    if (this.runtime.hidden()) this.stopTimers()
-    else if (this.joined) this.startTimers()
+    if (this.runtime.hidden()) {
+      this.stopTimers()
+      return
+    }
+    if (!this.joined) return
+    this.startTimers()
+    void this.transport.send(createHelloPayload(this.identity.nick))
+    this.syncStatus()
   }
 
   private bindVisibility(): void {
@@ -263,7 +302,8 @@ export class ChatSession {
       void this.transport.send(createHelloPayload(this.identity.nick))
     }, HELLO_INTERVAL_MS)
     this.relayTimer = this.runtime.setInterval(() => {
-      this.refreshStatus(this.status.phase, this.status.detail)
+      this.syncStatus()
+      for (const peerId of this.transport.peerIds()) void this.measure(peerId)
     }, RELAY_POLL_MS)
   }
 

@@ -73,7 +73,7 @@ npm test
 npm run dev
 ```
 
-Open two windows, join the same room. Top tabs or `Ctrl/Cmd+K` switch rooms. 「顔」 inserts kaomoji/emoji. Theme cycles Auto / Light / Dark.
+Open two windows, join the same room. Top tabs or `Ctrl/Cmd+K` switch rooms. 「顔」 inserts kaomoji/emoji. Theme cycles Auto / Light / Dark. Room passwords stay in the tab (sessionStorage) and are not written into the URL unless you choose 「含口令」.
 
 On a phone, nickname + room + **Join** sit above the fold. Chat uses a fixed viewport: the composer stays on screen (including when the keyboard opens via `visualViewport`). Members are a sheet, not a second column you have to scroll past.
 
@@ -119,7 +119,7 @@ npm test
 npm run dev
 ```
 
-两个窗口进同一房间即可互发。顶栏标签或 `Ctrl/Cmd+K` 切房间。「顔」插入颜文字/表情。主题：自动 / 浅色 / 深色。
+两个窗口进同一房间即可互发。顶栏标签或 `Ctrl/Cmd+K` 切房间。「顔」插入颜文字/表情。主题：自动 / 浅色 / 深色。口令只留在当前标签页，默认不写进网址；需要时再点「含口令」。
 
 手机上：昵称、房间、**加入**都在首屏，不用下滑。聊天是固定视口，输入框钉在底部（键盘弹出时用 `visualViewport` 收缩高度）。成员列表是浮层，不会把输入框顶出屏幕。
 
