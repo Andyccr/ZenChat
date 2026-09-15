@@ -1,9 +1,12 @@
 import { DEFAULT_ROOM, SOURCE_URL } from '../config/app'
 import { loadIdentity, persistNick } from '../core/identity'
-import { loadRecentRooms, type RecentRoom } from '../core/recent'
+import { loadRecentRooms, specFromRecent } from '../core/recent'
 import { normalizeRoomName } from '../core/room'
 import { RoomManager } from '../core/room-manager'
 import { parseHash, toHash } from '../core/router'
+import { withSecret, rememberSecret } from '../core/secrets'
+import { roomUrl, shareOrCopy } from '../core/share'
+import { watchDuplicateTab } from '../core/tab-guard'
 import type { RoomSpec, SignalStrategy, ThemePreference } from '../core/types'
 import { ChatPane } from './chat-pane'
 import { copy } from './copy'
@@ -12,6 +15,10 @@ import { applyTheme, cycleTheme, loadThemePreference, persistThemePreference, th
 
 function webrtcReady(): boolean {
   return typeof RTCPeerConnection === 'function'
+}
+
+function canJoin(): boolean {
+  return window.isSecureContext && webrtcReady()
 }
 
 export class App {
@@ -28,15 +35,17 @@ export class App {
   private jumpPass: HTMLInputElement
   private jumpStrategy: HTMLSelectElement
   private footerEl: HTMLElement
+  private dupBanner: HTMLElement
   private chat: ChatPane | null = null
   private lobbyEl: HTMLElement | null = null
   private routing = false
+  private stopTabWatch: (() => void) | null = null
 
   constructor(root: HTMLElement) {
     this.root = root
     this.theme = loadThemePreference()
     applyTheme(this.theme)
-    this.themeBtn = el('button', { class: 'btn ghost', type: 'button', title: '主题' }, [themeLabel(this.theme)])
+    this.themeBtn = el('button', { class: 'btn ghost', type: 'button', title: copy.theme }, [themeLabel(this.theme)])
     this.tabsEl = el('nav', { class: 'tabs', 'aria-label': copy.recent })
     this.toolsEl = el('div', { class: 'toolbar' })
     this.main = el('main', { class: 'main' })
@@ -47,6 +56,7 @@ export class App {
       el('option', { value: 'nostr' }, [copy.nostr]),
     ]) as HTMLSelectElement
     this.jump = this.buildJump()
+    this.dupBanner = el('div', { class: 'banner warn hidden' }, [copy.duplicateTab])
     this.footerEl = el('p', { class: 'footer' }, [
       el('a', { href: SOURCE_URL, target: '_blank', rel: 'noreferrer' }, [copy.source]),
       ' · AGPL-3.0',
@@ -54,25 +64,30 @@ export class App {
     this.manager = new RoomManager(this.identity, {
       onStatus: (status) => this.chat?.status(status),
       onMembers: (members) => this.chat?.members(members, this.manager.getSession()?.selfId ?? this.identity.id),
-      onLine: (line) => this.chat?.log.append(line),
-      onReset: (lines) => this.chat?.log.reset(lines),
+      onLine: (line) => this.chat?.push(line),
+      onReset: (lines) => this.chat?.reset(lines),
     })
   }
 
   start(): void {
     this.mount()
+    this.stopTabWatch = watchDuplicateTab(() => this.dupBanner.classList.remove('hidden'))
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applyTheme(this.theme))
     window.addEventListener('hashchange', () => {
       if (!this.routing) void this.route()
     })
     window.addEventListener('pagehide', () => {
+      this.stopTabWatch?.()
+      this.manager.snapshot()
       void this.manager.close()
+    })
+    window.addEventListener('pageshow', (event) => {
+      if (event.persisted) void this.route()
     })
     window.addEventListener('keydown', (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
-        this.jump.showModal()
-        this.jumpRoom.focus()
+        this.openJump()
       }
       if (event.key === 'Escape') this.jump.close()
     })
@@ -98,6 +113,7 @@ export class App {
           this.toolsEl,
         ]),
         this.capabilityBanner(),
+        this.dupBanner,
         this.main,
         this.footerEl,
       ]),
@@ -119,7 +135,7 @@ export class App {
       this.jumpStrategy,
       el('div', { class: 'actions' }, [
         el('button', { class: 'btn primary', type: 'submit' }, [copy.join]),
-        el('button', { class: 'btn ghost', type: 'button', value: 'cancel' }, ['取消']),
+        el('button', { class: 'btn ghost', type: 'button', value: 'cancel' }, [copy.cancel]),
       ]),
     ])
     const dialog = el('dialog', { class: 'jump' }, [form]) as HTMLDialogElement
@@ -137,20 +153,42 @@ export class App {
     return dialog
   }
 
+  private openJump(prefill?: Partial<RoomSpec> & { needPassword?: boolean }): void {
+    this.jumpRoom.value = prefill?.name ?? ''
+    this.jumpPass.value = prefill?.password ?? ''
+    this.jumpStrategy.value = prefill?.strategy ?? 'torrent'
+    this.jump.showModal()
+    if (prefill?.needPassword) this.jumpPass.focus()
+    else this.jumpRoom.focus()
+  }
+
   private async route(): Promise<void> {
     const route = parseHash(location.hash)
     this.refreshTabs()
-    this.refreshTools(route.name === 'room' ? route.spec : null)
+    this.refreshTools(route.name === 'room' ? withSecret(route.spec) : null)
     if (route.name === 'lobby') {
       await this.manager.close()
       this.showLobby()
       return
     }
-    await this.showChat(route.spec)
+    const spec = this.stripPasswordFromHash(withSecret(route.spec))
+    await this.showChat(spec)
+  }
+
+  private stripPasswordFromHash(spec: RoomSpec): RoomSpec {
+    rememberSecret(spec)
+    const clean = toHash({ name: 'room', spec }, false)
+    if (spec.password && location.hash !== clean) {
+      this.routing = true
+      history.replaceState(null, '', `${location.pathname}${location.search}${clean}`)
+      this.routing = false
+    }
+    return spec
   }
 
   private go(spec: RoomSpec): void {
-    const next = toHash({ name: 'room', spec }, Boolean(spec.password))
+    rememberSecret(spec)
+    const next = toHash({ name: 'room', spec }, false)
     if (location.hash === next) {
       void this.showChat(spec)
       return
@@ -175,9 +213,32 @@ export class App {
     if (!this.chat) {
       this.chat = new ChatPane({
         selfId: this.identity.id,
-        send: (text) => void this.manager.getSession()?.sendChat(text),
+        nick: this.identity.nick,
+        send: (text) => this.manager.getSession()?.sendChat(text) ?? Promise.resolve('closed'),
         typing: () => this.manager.getSession()?.sendTyping(),
+        onRetry: () => {
+          const current = this.manager.current() ?? spec
+          void this.manager.open(current, true)
+        },
+        onShare: () => {
+          const current = this.manager.current() ?? spec
+          void this.shareRoom(current, false)
+        },
+        onSwitchSignal: () => {
+          const current = this.manager.current() ?? spec
+          this.go({
+            ...current,
+            strategy: current.strategy === 'torrent' ? 'nostr' : 'torrent',
+          })
+        },
+        onNick: (nick) => {
+          this.identity = { ...this.identity, nick: persistNick(nick) }
+          this.manager.setIdentity(this.identity)
+          this.chat?.setNick(this.identity.nick)
+        },
       })
+    } else {
+      this.chat.setNick(this.identity.nick)
     }
     this.lobbyEl = null
     this.footerEl.hidden = true
@@ -207,23 +268,19 @@ export class App {
       el('option', { value: 'torrent' }, [copy.torrent]),
       el('option', { value: 'nostr' }, [copy.nostr]),
     ]) as HTMLSelectElement
+    const joinBtn = el('button', { class: 'btn primary join-btn', type: 'submit' }, [copy.join]) as HTMLButtonElement
+    if (!canJoin()) joinBtn.disabled = true
     const form = el('form', { class: 'panel form lobby-form' }, [
-      el('div', { class: 'join-row' }, [
-        field(copy.nick, nick),
-        field(copy.room, room),
-        el('button', { class: 'btn primary join-btn', type: 'submit' }, [copy.join]),
-      ]),
+      el('div', { class: 'join-row' }, [field(copy.nick, nick), field(copy.room, room), joinBtn]),
       el('details', { class: 'more' }, [
         el('summary', {}, [copy.more]),
-        el('div', { class: 'row' }, [
-          field(copy.password, password),
-          field(copy.strategy, strategy),
-        ]),
+        el('div', { class: 'row' }, [field(copy.password, password), field(copy.strategy, strategy)]),
         el('span', { class: 'hint' }, [copy.passwordHint]),
       ]),
     ])
     form.addEventListener('submit', (event) => {
       event.preventDefault()
+      if (!canJoin()) return
       this.identity = { ...this.identity, nick: persistNick(nick.value) }
       this.manager.setIdentity(this.identity)
       this.go({
@@ -232,27 +289,43 @@ export class App {
         strategy: strategy.value as SignalStrategy,
       })
     })
-    return el('div', { class: 'lobby' }, [el('p', { class: 'lede' }, [copy.lobbyHint]), form])
+    return el('div', { class: 'lobby' }, [
+      el('p', { class: 'lede' }, [copy.lobbyHint]),
+      el('ul', { class: 'tips' }, [
+        el('li', {}, [copy.tipSame]),
+        el('li', {}, [copy.tipHttps]),
+        el('li', {}, [copy.tipNat]),
+      ]),
+      form,
+    ])
   }
 
   private refreshTabs(active?: RoomSpec): void {
     const rooms = loadRecentRooms()
     empty(this.tabsEl)
     for (const item of rooms) {
-      const spec: RoomSpec = { name: item.name, password: '', strategy: item.strategy }
       const current = Boolean(active && item.name === normalizeRoomName(active.name) && item.strategy === active.strategy)
-      const tab = el('a', { class: `tab${current ? ' on' : ''}`, href: toHash({ name: 'room', spec }) }, [item.name])
+      const label = item.hasPassword
+        ? [item.name, el('span', { class: 'lock', title: copy.locked }, ['锁'])]
+        : [item.name]
+      const tab = el(
+        'a',
+        { class: `tab${current ? ' on' : ''}`, href: toHash({ name: 'room', spec: { name: item.name, password: '', strategy: item.strategy } }) },
+        label,
+      )
       tab.addEventListener('click', (event) => {
         event.preventDefault()
-        this.go(specFromRecent(item, active))
+        const resolved = specFromRecent(item, active)
+        if (resolved === 'need-password') {
+          this.openJump({ name: item.name, strategy: item.strategy, needPassword: true })
+          return
+        }
+        this.go(resolved)
       })
       this.tabsEl.append(tab)
     }
     const add = el('button', { class: 'tab add', type: 'button', title: copy.addRoom }, ['+'])
-    add.addEventListener('click', () => {
-      this.jump.showModal()
-      this.jumpRoom.focus()
-    })
+    add.addEventListener('click', () => this.openJump())
     this.tabsEl.append(add)
   }
 
@@ -261,32 +334,29 @@ export class App {
     this.toolsEl.append(this.themeBtn)
     if (!spec) return
     const share = el('button', { class: 'btn ghost', type: 'button' }, [copy.share])
-    share.addEventListener('click', async () => {
-      await navigator.clipboard.writeText(`${location.origin}${location.pathname}${toHash({ name: 'room', spec })}`)
-      share.textContent = copy.copied
-      window.setTimeout(() => {
-        share.textContent = copy.share
-      }, 1000)
-    })
+    share.addEventListener('click', () => void this.shareRoom(spec, false, share))
     this.toolsEl.append(share)
     if (spec.password) {
       const shareKey = el('button', { class: 'btn ghost', type: 'button' }, [copy.shareWithKey])
-      shareKey.addEventListener('click', async () => {
-        await navigator.clipboard.writeText(`${location.origin}${location.pathname}${toHash({ name: 'room', spec }, true)}`)
-        shareKey.textContent = copy.copied
-      })
+      shareKey.addEventListener('click', () => void this.shareRoom(spec, true, shareKey))
       this.toolsEl.append(shareKey)
     }
     const leave = el('a', { class: 'btn ghost', href: '#/' }, [copy.leave])
     this.toolsEl.append(leave)
   }
+
+  private async shareRoom(spec: RoomSpec, includePassword: boolean, button?: HTMLButtonElement): Promise<void> {
+    const url = roomUrl(location.origin, location.pathname, spec, includePassword)
+    const result = await shareOrCopy(url)
+    if (!button) return
+    const original = button.textContent
+    button.textContent = result === 'shared' ? copy.shared : result === 'copied' ? copy.copied : copy.copyFailed
+    window.setTimeout(() => {
+      if (original) button.textContent = original
+    }, 1400)
+  }
 }
 
 function field(label: string, control: HTMLElement): HTMLElement {
   return el('label', { class: 'field' }, [el('span', {}, [label]), control])
-}
-
-function specFromRecent(item: RecentRoom, active?: RoomSpec): RoomSpec {
-  const password = active && item.name === normalizeRoomName(active.name) && item.strategy === active.strategy ? active.password : ''
-  return { name: item.name, password, strategy: item.strategy }
 }

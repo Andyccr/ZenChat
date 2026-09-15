@@ -10,6 +10,8 @@ export class FakeTransport implements SignallingTransport {
   pingMs = 12
   joinGate: Promise<void> | null = null
   failJoin: Error | null = null
+  failSend: Error | null = null
+  relayStates: RelayStatus[] = []
   private abandoned = false
 
   constructor(strategy: SignalStrategy = 'torrent') {
@@ -35,6 +37,7 @@ export class FakeTransport implements SignallingTransport {
   }
 
   async send(payload: unknown, target?: string): Promise<void> {
+    if (this.failSend) throw this.failSend
     if (target !== undefined) this.sent.push({ payload, target })
     else this.sent.push({ payload })
   }
@@ -48,7 +51,7 @@ export class FakeTransport implements SignallingTransport {
   }
 
   relays(): RelayStatus[] {
-    return []
+    return this.relayStates
   }
 
   peerJoin(peerId: string): void {

@@ -46,7 +46,8 @@ describe('ChatSession', () => {
     const { session, lines, transport, statuses } = harness()
     await session.join(spec)
     expect(session.isJoined()).toBe(true)
-    expect(statuses.at(-1)?.detail).toBe('已宣布，等待对等节点')
+    expect(statuses.at(-1)?.detail).toBe('还没有同伴，把链接发给对方')
+    expect(transport().sent.some((item) => (item.payload as { type: string }).type === 'hello' && item.target === undefined)).toBe(true)
 
     transport().peerJoin('peer-aa')
     expect(lines.some((line) => line.kind === 'system' && line.text.includes('加入'))).toBe(true)
@@ -95,7 +96,24 @@ describe('ChatSession', () => {
     await session.join(spec)
     await session.leave()
     const sent = transport().sent.length
-    await session.sendChat('迟了')
+    expect(await session.sendChat('迟了')).toBe('closed')
     expect(transport().sent).toHaveLength(sent)
+  })
+
+  it('keeps whitespace-only messages and reports send failure', async () => {
+    const { session, lines, transport } = harness()
+    await session.join(spec)
+    expect(await session.sendChat('   ')).toBe('empty')
+    transport().failSend = new Error('dc closed')
+    expect(await session.sendChat('你好')).toBe('failed')
+    expect(lines.some((line) => line.kind === 'system' && line.text.includes('没发出去'))).toBe(true)
+  })
+
+  it('escalates when every tracker socket is closed', async () => {
+    const { session, clock, statuses, transport } = harness()
+    await session.join(spec)
+    transport().relayStates = [{ url: 'wss://tracker.invalid', readyState: 3 }]
+    clock.advance(5000)
+    expect(statuses.at(-1)).toMatchObject({ phase: 'error', detail: 'Tracker 连不上，可改用 Nostr' })
   })
 })
