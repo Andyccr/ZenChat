@@ -21,7 +21,10 @@ export type Member = {
   lastSeenAt: number
   rttMs: number | null
   typing: boolean
+  features: string[]
 }
+
+export type Delivery = 'pending' | 'acked' | 'failed'
 
 export type ChatLine =
   | {
@@ -32,6 +35,7 @@ export type ChatLine =
       text: string
       ts: number
       self: boolean
+      delivery?: Delivery
     }
   | {
       kind: 'system'

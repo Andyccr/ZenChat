@@ -16,6 +16,8 @@ flowchart LR
     UI[UI Shell]
     RM[RoomManager]
     CS[ChatSession]
+    SM[SessionMachine]
+    OB[Outbound]
     P[Presence]
     L[Transcript]
     TR[SignallingTransport]
@@ -32,6 +34,8 @@ flowchart LR
   end
 
   UI --> RM --> CS
+  CS --> SM[SessionMachine]
+  CS --> OB[Outbound]
   CS --> P[Presence]
   CS --> L[Transcript]
   CS --> TR
@@ -46,7 +50,9 @@ flowchart LR
 |---|---|
 | UI Shell | Lobby, tabs, theme. Chat pane is a separate view; shell does not remount on switch. |
 | RoomManager | Room lifecycle, log cache, skip reconnect if the same room is already joined. |
-| ChatSession | Orchestrates hello / chat / typing over an injected transport and runtime. |
+| ChatSession | Thin orchestrator: transport in, machine + outbound + presence + transcript out. |
+| SessionMachine | Pure join/wait/live/error transitions. |
+| Outbound | Delivery timers. Peers that advertise `ack` in hello get a receipt. |
 | Presence / Transcript | Members + typing TTL; capped message log and dedupe ids. |
 | Transport factory | Default Trystero torrent/nostr. Tests inject a fake. A `Libp2pTransport` can plug in here. |
 | DataChannel | Encrypted chat after ICE succeeds. Trackers never see plaintext. |

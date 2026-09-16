@@ -43,4 +43,6 @@ export const copy = {
   needPassword: '这个房间设了口令',
   duplicateTab: '另一个标签页也开着禅聊，会显示成两个人。',
   theme: '主题',
+  delivered: '送达',
+  undelivered: '未送达',
 }
