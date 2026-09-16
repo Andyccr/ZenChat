@@ -12,5 +12,6 @@ export const TYPING_TTL_MS = 2500
 export const TYPING_THROTTLE_MS = 1800
 export const HELLO_INTERVAL_MS = 25_000
 export const RELAY_POLL_MS = 5000
+export const ACK_TIMEOUT_MS = 8000
 export const SOURCE_URL = 'https://github.com/Andyccr/ZenChat'
 export const PAGES_URL = 'https://andyccr.github.io/ZenChat/'

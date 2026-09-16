@@ -12,7 +12,7 @@ export class Presence {
     private typingTtl = TYPING_TTL_MS,
   ) {}
 
-  upsert(id: string, nick: string): Member {
+  upsert(id: string, nick: string, features?: string[]): Member {
     const existing = this.members.get(id)
     const now = this.runtime.now()
     const member: Member = {
@@ -22,9 +22,14 @@ export class Presence {
       lastSeenAt: now,
       rttMs: existing?.rttMs ?? null,
       typing: existing?.typing ?? false,
+      features: features ?? existing?.features ?? [],
     }
     this.members.set(id, member)
     return member
+  }
+
+  supports(feature: string): boolean {
+    return this.list().some((member) => member.features.includes(feature))
   }
 
   remove(id: string): Member | undefined {
