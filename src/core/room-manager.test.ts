@@ -50,6 +50,11 @@ describe('RoomManager', () => {
     expect(rm.getSession()?.isJoined()).toBe(true)
   })
 
+  it('returns closed when sending without a live session', async () => {
+    const { rm } = manager()
+    expect(await rm.sendChat('hi')).toBe('closed')
+  })
+
   it('retries after a failed join instead of sticking on the dead session', async () => {
     const clock = createMemoryRuntime()
     let fail = true

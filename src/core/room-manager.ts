@@ -2,7 +2,7 @@ import { loadRoomLog, saveRoomLog } from './cache'
 import { rememberRoom } from './recent'
 import { sameRoom } from './room'
 import { ChatSession, type SessionListener, type SessionOptions } from './session'
-import type { Identity, RoomSpec } from './types'
+import type { Identity, RoomSpec, SendResult } from './types'
 
 export class RoomManager {
   private identity: Identity
@@ -24,6 +24,24 @@ export class RoomManager {
 
   getSession(): ChatSession | null {
     return this.session
+  }
+
+  selfId(): string {
+    return this.session?.selfId ?? this.identity.id
+  }
+
+  sendChat(text: string): Promise<SendResult> {
+    return this.session?.sendChat(text) ?? Promise.resolve('closed')
+  }
+
+  sendTyping(): void {
+    this.session?.sendTyping()
+  }
+
+  retry(): Promise<ChatSession | null> {
+    const spec = this.spec
+    if (!spec) return Promise.resolve(null)
+    return this.open(spec, true)
   }
 
   setIdentity(identity: Identity): void {

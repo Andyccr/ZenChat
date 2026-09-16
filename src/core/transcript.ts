@@ -1,6 +1,18 @@
 import { MAX_SEEN_IDS } from '../config/app'
 import { trimLines } from './cache'
-import type { ChatLine } from './types'
+import type { ChatLine, Delivery } from './types'
+
+function dropPending(line: ChatLine): ChatLine {
+  if (line.kind !== 'chat' || line.delivery !== 'pending') return line
+  return chatLine({
+    id: line.id,
+    fromId: line.fromId,
+    nick: line.nick,
+    text: line.text,
+    ts: line.ts,
+    self: line.self,
+  })
+}
 
 export class Transcript {
   private lines: ChatLine[] = []
@@ -9,7 +21,7 @@ export class Transcript {
 
   hydrate(lines: ChatLine[]): ChatLine[] {
     this.clear()
-    this.lines = trimLines(lines)
+    this.lines = trimLines(lines.map(dropPending))
     for (const line of this.lines) {
       if (line.kind === 'chat') this.remember(line.id)
     }
@@ -44,6 +56,15 @@ export class Transcript {
     return line
   }
 
+  patchDelivery(id: string, delivery: Delivery): ChatLine | null {
+    const index = this.lines.findIndex((line) => line.id === id)
+    const current = index >= 0 ? this.lines[index] : undefined
+    if (index < 0 || !current || current.kind !== 'chat') return null
+    const next = { ...current, delivery }
+    this.lines[index] = next
+    return next
+  }
+
   clear(): void {
     this.lines = []
     this.seen.clear()
@@ -58,8 +79,18 @@ export function chatLine(input: {
   text: string
   ts: number
   self: boolean
+  delivery?: Delivery
 }): ChatLine {
-  return { kind: 'chat', ...input }
+  if (input.delivery) return { kind: 'chat', ...input, delivery: input.delivery }
+  return {
+    kind: 'chat',
+    id: input.id,
+    fromId: input.fromId,
+    nick: input.nick,
+    text: input.text,
+    ts: input.ts,
+    self: input.self,
+  }
 }
 
 export function systemLine(id: string, text: string, ts: number): ChatLine {

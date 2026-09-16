@@ -458,9 +458,19 @@ textarea:focus-visible {
   border-color: transparent;
 }
 
+.bubble.self .delivery {
+  color: color-mix(in srgb, var(--on-accent) 74%, transparent);
+  font-size: 11px;
+}
+
 .bubble.self header,
 .bubble.self .muted {
   color: color-mix(in srgb, var(--on-accent) 74%, transparent);
+}
+
+.bubble.self .delivery.fail,
+.bubble.failed {
+  opacity: 0.86;
 }
 
 .bubble header {

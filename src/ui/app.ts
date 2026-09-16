@@ -1,25 +1,18 @@
-import { DEFAULT_ROOM, SOURCE_URL } from '../config/app'
+import { SOURCE_URL } from '../config/app'
 import { loadIdentity, persistNick } from '../core/identity'
-import { loadRecentRooms, specFromRecent } from '../core/recent'
-import { normalizeRoomName } from '../core/room'
 import { RoomManager } from '../core/room-manager'
 import { parseHash, toHash } from '../core/router'
-import { withSecret, rememberSecret } from '../core/secrets'
-import { roomUrl, shareOrCopy } from '../core/share'
+import { rememberSecret, withSecret } from '../core/secrets'
 import { watchDuplicateTab } from '../core/tab-guard'
-import type { RoomSpec, SignalStrategy, ThemePreference } from '../core/types'
+import type { RoomSpec, ThemePreference } from '../core/types'
+import { capabilityBanner } from './capability'
 import { ChatPane } from './chat-pane'
 import { copy } from './copy'
-import { el, empty } from './dom'
+import { el } from './dom'
+import { createJumpDialog, type JumpDialog } from './jump-dialog'
+import { buildLobby } from './lobby'
+import { flashShare, renderTabs, renderTools } from './room-chrome'
 import { applyTheme, cycleTheme, loadThemePreference, persistThemePreference, themeLabel } from './theme'
-
-function webrtcReady(): boolean {
-  return typeof RTCPeerConnection === 'function'
-}
-
-function canJoin(): boolean {
-  return window.isSecureContext && webrtcReady()
-}
 
 export class App {
   private root: HTMLElement
@@ -30,10 +23,7 @@ export class App {
   private tabsEl: HTMLElement
   private toolsEl: HTMLElement
   private main: HTMLElement
-  private jump: HTMLDialogElement
-  private jumpRoom: HTMLInputElement
-  private jumpPass: HTMLInputElement
-  private jumpStrategy: HTMLSelectElement
+  private jump: JumpDialog
   private footerEl: HTMLElement
   private dupBanner: HTMLElement
   private chat: ChatPane | null = null
@@ -49,13 +39,7 @@ export class App {
     this.tabsEl = el('nav', { class: 'tabs', 'aria-label': copy.recent })
     this.toolsEl = el('div', { class: 'toolbar' })
     this.main = el('main', { class: 'main' })
-    this.jumpRoom = el('input', { placeholder: copy.room, maxlength: 64, autocomplete: 'off' }) as HTMLInputElement
-    this.jumpPass = el('input', { placeholder: copy.password, type: 'password', autocomplete: 'off' }) as HTMLInputElement
-    this.jumpStrategy = el('select', {}, [
-      el('option', { value: 'torrent' }, [copy.torrent]),
-      el('option', { value: 'nostr' }, [copy.nostr]),
-    ]) as HTMLSelectElement
-    this.jump = this.buildJump()
+    this.jump = createJumpDialog((spec) => this.go(spec))
     this.dupBanner = el('div', { class: 'banner warn hidden' }, [copy.duplicateTab])
     this.footerEl = el('p', { class: 'footer' }, [
       el('a', { href: SOURCE_URL, target: '_blank', rel: 'noreferrer' }, [copy.source]),
@@ -63,7 +47,7 @@ export class App {
     ])
     this.manager = new RoomManager(this.identity, {
       onStatus: (status) => this.chat?.status(status),
-      onMembers: (members) => this.chat?.members(members, this.manager.getSession()?.selfId ?? this.identity.id),
+      onMembers: (members) => this.chat?.members(members, this.manager.selfId()),
       onLine: (line) => this.chat?.push(line),
       onReset: (lines) => this.chat?.reset(lines),
     })
@@ -87,7 +71,7 @@ export class App {
     window.addEventListener('keydown', (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
-        this.openJump()
+        this.jump.open()
       }
       if (event.key === 'Escape') this.jump.close()
     })
@@ -112,67 +96,24 @@ export class App {
           this.tabsEl,
           this.toolsEl,
         ]),
-        this.capabilityBanner(),
+        capabilityBanner(),
         this.dupBanner,
         this.main,
         this.footerEl,
       ]),
-      this.jump,
+      this.jump.el,
     )
-  }
-
-  private capabilityBanner(): HTMLElement {
-    if (!window.isSecureContext) return el('div', { class: 'banner' }, [copy.insecure])
-    if (!webrtcReady()) return el('div', { class: 'banner' }, [copy.webrtcMissing])
-    return el('div')
-  }
-
-  private buildJump(): HTMLDialogElement {
-    const form = el('form', { class: 'jump-form', method: 'dialog' }, [
-      el('h2', {}, [copy.switch]),
-      this.jumpRoom,
-      this.jumpPass,
-      this.jumpStrategy,
-      el('div', { class: 'actions' }, [
-        el('button', { class: 'btn primary', type: 'submit' }, [copy.join]),
-        el('button', { class: 'btn ghost', type: 'button', value: 'cancel' }, [copy.cancel]),
-      ]),
-    ])
-    const dialog = el('dialog', { class: 'jump' }, [form]) as HTMLDialogElement
-    form.addEventListener('submit', (event) => {
-      event.preventDefault()
-      const spec: RoomSpec = {
-        name: this.jumpRoom.value,
-        password: this.jumpPass.value,
-        strategy: this.jumpStrategy.value as SignalStrategy,
-      }
-      dialog.close()
-      this.go(spec)
-    })
-    form.querySelector('button[value="cancel"]')?.addEventListener('click', () => dialog.close())
-    return dialog
-  }
-
-  private openJump(prefill?: Partial<RoomSpec> & { needPassword?: boolean }): void {
-    this.jumpRoom.value = prefill?.name ?? ''
-    this.jumpPass.value = prefill?.password ?? ''
-    this.jumpStrategy.value = prefill?.strategy ?? 'torrent'
-    this.jump.showModal()
-    if (prefill?.needPassword) this.jumpPass.focus()
-    else this.jumpRoom.focus()
   }
 
   private async route(): Promise<void> {
     const route = parseHash(location.hash)
-    this.refreshTabs()
-    this.refreshTools(route.name === 'room' ? withSecret(route.spec) : null)
+    this.refreshChrome(route.name === 'room' ? withSecret(route.spec) : undefined)
     if (route.name === 'lobby') {
       await this.manager.close()
       this.showLobby()
       return
     }
-    const spec = this.stripPasswordFromHash(withSecret(route.spec))
-    await this.showChat(spec)
+    await this.showChat(this.stripPasswordFromHash(withSecret(route.spec)))
   }
 
   private stripPasswordFromHash(spec: RoomSpec): RoomSpec {
@@ -203,10 +144,18 @@ export class App {
     this.chat?.hide()
     this.footerEl.hidden = false
     this.root.classList.remove('mode-chat')
-    if (!this.lobbyEl) this.lobbyEl = this.buildLobby()
-    else this.lobbyEl.replaceWith((this.lobbyEl = this.buildLobby()))
+    const next = buildLobby({
+      nick: this.identity.nick,
+      onJoin: ({ nick, spec }) => {
+        this.identity = { ...this.identity, nick: persistNick(nick) }
+        this.manager.setIdentity(this.identity)
+        this.go(spec)
+      },
+    })
+    if (this.lobbyEl) this.lobbyEl.replaceWith(next)
+    this.lobbyEl = next
     this.main.replaceChildren(this.lobbyEl)
-    this.refreshTabs()
+    this.refreshChrome()
   }
 
   private async showChat(spec: RoomSpec): Promise<void> {
@@ -214,22 +163,16 @@ export class App {
       this.chat = new ChatPane({
         selfId: this.identity.id,
         nick: this.identity.nick,
-        send: (text) => this.manager.getSession()?.sendChat(text) ?? Promise.resolve('closed'),
-        typing: () => this.manager.getSession()?.sendTyping(),
-        onRetry: () => {
-          const current = this.manager.current() ?? spec
-          void this.manager.open(current, true)
-        },
+        send: (text) => this.manager.sendChat(text),
+        typing: () => this.manager.sendTyping(),
+        onRetry: () => void this.manager.retry(),
         onShare: () => {
           const current = this.manager.current() ?? spec
-          void this.shareRoom(current, false)
+          void flashShare(current, false)
         },
         onSwitchSignal: () => {
           const current = this.manager.current() ?? spec
-          this.go({
-            ...current,
-            strategy: current.strategy === 'torrent' ? 'nostr' : 'torrent',
-          })
+          this.go({ ...current, strategy: current.strategy === 'torrent' ? 'nostr' : 'torrent' })
         },
         onNick: (nick) => {
           this.identity = { ...this.identity, nick: persistNick(nick) }
@@ -245,8 +188,7 @@ export class App {
     this.root.classList.add('mode-chat')
     this.main.replaceChildren(this.chat.root)
     this.chat.show()
-    this.refreshTabs(spec)
-    this.refreshTools(spec)
+    this.refreshChrome(spec)
     try {
       await this.manager.open(spec)
     } catch (error) {
@@ -260,103 +202,14 @@ export class App {
     }
   }
 
-  private buildLobby(): HTMLElement {
-    const nick = el('input', { maxlength: 24, value: this.identity.nick, autocomplete: 'nickname' }) as HTMLInputElement
-    const room = el('input', { maxlength: 64, value: DEFAULT_ROOM, autocomplete: 'off' }) as HTMLInputElement
-    const password = el('input', { type: 'password', autocomplete: 'off' }) as HTMLInputElement
-    const strategy = el('select', {}, [
-      el('option', { value: 'torrent' }, [copy.torrent]),
-      el('option', { value: 'nostr' }, [copy.nostr]),
-    ]) as HTMLSelectElement
-    const joinBtn = el('button', { class: 'btn primary join-btn', type: 'submit' }, [copy.join]) as HTMLButtonElement
-    if (!canJoin()) joinBtn.disabled = true
-    const form = el('form', { class: 'panel form lobby-form' }, [
-      el('div', { class: 'join-row' }, [field(copy.nick, nick), field(copy.room, room), joinBtn]),
-      el('details', { class: 'more' }, [
-        el('summary', {}, [copy.more]),
-        el('div', { class: 'row' }, [field(copy.password, password), field(copy.strategy, strategy)]),
-        el('span', { class: 'hint' }, [copy.passwordHint]),
-      ]),
-    ])
-    form.addEventListener('submit', (event) => {
-      event.preventDefault()
-      if (!canJoin()) return
-      this.identity = { ...this.identity, nick: persistNick(nick.value) }
-      this.manager.setIdentity(this.identity)
-      this.go({
-        name: room.value,
-        password: password.value,
-        strategy: strategy.value as SignalStrategy,
-      })
+  private refreshChrome(spec?: RoomSpec): void {
+    renderTabs(this.tabsEl, spec, {
+      onGo: (next) => this.go(next),
+      onNeedPassword: (item) => this.jump.open({ name: item.name, strategy: item.strategy, needPassword: true }),
+      onAdd: () => this.jump.open(),
     })
-    return el('div', { class: 'lobby' }, [
-      el('p', { class: 'lede' }, [copy.lobbyHint]),
-      el('ul', { class: 'tips' }, [
-        el('li', {}, [copy.tipSame]),
-        el('li', {}, [copy.tipHttps]),
-        el('li', {}, [copy.tipNat]),
-      ]),
-      form,
-    ])
+    renderTools(this.toolsEl, this.themeBtn, spec ?? null, (room, withKey, button) => {
+      void flashShare(room, withKey, button)
+    })
   }
-
-  private refreshTabs(active?: RoomSpec): void {
-    const rooms = loadRecentRooms()
-    empty(this.tabsEl)
-    for (const item of rooms) {
-      const current = Boolean(active && item.name === normalizeRoomName(active.name) && item.strategy === active.strategy)
-      const label = item.hasPassword
-        ? [item.name, el('span', { class: 'lock', title: copy.locked }, ['锁'])]
-        : [item.name]
-      const tab = el(
-        'a',
-        { class: `tab${current ? ' on' : ''}`, href: toHash({ name: 'room', spec: { name: item.name, password: '', strategy: item.strategy } }) },
-        label,
-      )
-      tab.addEventListener('click', (event) => {
-        event.preventDefault()
-        const resolved = specFromRecent(item, active)
-        if (resolved === 'need-password') {
-          this.openJump({ name: item.name, strategy: item.strategy, needPassword: true })
-          return
-        }
-        this.go(resolved)
-      })
-      this.tabsEl.append(tab)
-    }
-    const add = el('button', { class: 'tab add', type: 'button', title: copy.addRoom }, ['+'])
-    add.addEventListener('click', () => this.openJump())
-    this.tabsEl.append(add)
-  }
-
-  private refreshTools(spec: RoomSpec | null): void {
-    empty(this.toolsEl)
-    this.toolsEl.append(this.themeBtn)
-    if (!spec) return
-    const share = el('button', { class: 'btn ghost', type: 'button' }, [copy.share])
-    share.addEventListener('click', () => void this.shareRoom(spec, false, share))
-    this.toolsEl.append(share)
-    if (spec.password) {
-      const shareKey = el('button', { class: 'btn ghost', type: 'button' }, [copy.shareWithKey])
-      shareKey.addEventListener('click', () => void this.shareRoom(spec, true, shareKey))
-      this.toolsEl.append(shareKey)
-    }
-    const leave = el('a', { class: 'btn ghost', href: '#/' }, [copy.leave])
-    this.toolsEl.append(leave)
-  }
-
-  private async shareRoom(spec: RoomSpec, includePassword: boolean, button?: HTMLButtonElement): Promise<void> {
-    const url = roomUrl(location.origin, location.pathname, spec, includePassword)
-    const result = await shareOrCopy(url)
-    if (!button) return
-    const original = button.textContent
-    button.textContent = result === 'shared' ? copy.shared : result === 'copied' ? copy.copied : copy.copyFailed
-    window.setTimeout(() => {
-      if (original) button.textContent = original
-    }, 1400)
-  }
-}
-
-function field(label: string, control: HTMLElement): HTMLElement {
-  return el('label', { class: 'field' }, [el('span', {}, [label]), control])
 }
