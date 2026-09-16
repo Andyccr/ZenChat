@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createChatPayload, parsePayload } from './protocol'
+import { createAckPayload, createChatPayload, createHelloPayload, parsePayload } from './protocol'
 
 describe('parsePayload', () => {
   it('accepts a well-formed chat message', () => {
@@ -29,5 +29,22 @@ describe('parsePayload', () => {
       type: 'typing',
       nick: '听雨',
     })
+  })
+
+  it('reads hello features and ack ids, ignoring unknown types', () => {
+    expect(parsePayload(createHelloPayload('晚风'))).toEqual({
+      v: 1,
+      type: 'hello',
+      nick: '晚风',
+      features: ['ack'],
+    })
+    expect(parsePayload({ v: 1, type: 'hello', nick: '晚风' })).toMatchObject({ features: [] })
+    expect(parsePayload(createAckPayload('晚风', 'aabbccdd12345678'))).toEqual({
+      v: 1,
+      type: 'ack',
+      id: 'aabbccdd12345678',
+      nick: '晚风',
+    })
+    expect(parsePayload({ v: 1, type: 'leave', nick: '晚风' })).toBeNull()
   })
 })

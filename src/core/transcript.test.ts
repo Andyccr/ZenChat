@@ -28,4 +28,12 @@ describe('Transcript', () => {
     expect(ids.has('seen-0')).toBe(false)
     expect(ids.has(`seen-${MAX_SEEN_IDS + 9}`)).toBe(true)
   })
+
+  it('drops pending delivery when hydrating a cached log', () => {
+    const log = new Transcript()
+    log.hydrate([chatLine({ id: 'aabbccdd', fromId: 'me', nick: '晚风', text: 'hi', ts: 1, self: true, delivery: 'pending' })])
+    const row = log.snapshot()[0]
+    expect(row).toMatchObject({ kind: 'chat', id: 'aabbccdd', text: 'hi' })
+    expect(row && row.kind === 'chat' ? row.delivery : 'missing').toBeUndefined()
+  })
 })

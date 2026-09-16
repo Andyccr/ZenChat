@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createTypingPayload } from './protocol'
+import { createAckPayload, createHelloPayload, createTypingPayload } from './protocol'
 import { createMemoryRuntime } from './runtime'
 import { ChatSession } from './session'
 import { FakeTransport } from './transports/fake'
@@ -57,6 +57,27 @@ describe('ChatSession', () => {
     const self = lines.find((line) => line.kind === 'chat' && line.self)
     expect(self).toMatchObject({ text: '你好', nick: '晚风' })
     expect(transport().sent.some((item) => (item.payload as { type: string }).type === 'chat')).toBe(true)
+  })
+
+  it('acks remote chat and waits for ack-capable peers', async () => {
+    const { session, clock, lines, transport } = harness()
+    await session.join(spec)
+    transport().payload('peer-b', createHelloPayload('青石'))
+    const payload = { v: 1, type: 'chat', id: 'aabbccdd12345678', ts: 1, nick: '青石', text: '在吗' }
+    transport().payload('peer-b', payload)
+    expect(transport().sent.some((item) => (item.payload as { type: string }).type === 'ack' && item.target === 'peer-b')).toBe(true)
+
+    await session.sendChat('回你')
+    const pending = [...lines].reverse().find((line) => line.kind === 'chat' && line.self)
+    expect(pending).toMatchObject({ delivery: 'pending' })
+    transport().payload('peer-b', createAckPayload('青石', pending && pending.kind === 'chat' ? pending.id : ''))
+    const acked = [...lines].reverse().find((line) => line.kind === 'chat' && line.self)
+    expect(acked).toMatchObject({ delivery: 'acked' })
+
+    await session.sendChat('第二句')
+    clock.advance(8000)
+    const failed = [...lines].reverse().find((line) => line.kind === 'chat' && line.self)
+    expect(failed).toMatchObject({ delivery: 'failed' })
   })
 
   it('accepts remote chat once and ignores duplicates', async () => {
