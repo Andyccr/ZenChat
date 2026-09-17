@@ -68,6 +68,13 @@ export class Presence {
     return [...this.members.values()].sort((a, b) => a.joinedAt - b.joinedAt)
   }
 
+  prune(maxAgeMs: number): Member[] {
+    const cutoff = this.runtime.now() - maxAgeMs
+    const gone = this.list().filter((member) => member.lastSeenAt < cutoff)
+    for (const member of gone) this.remove(member.id)
+    return gone
+  }
+
   clear(): void {
     for (const id of this.typingTimers.keys()) this.clearTypingTimer(id)
     this.members.clear()

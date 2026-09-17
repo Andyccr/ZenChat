@@ -32,6 +32,10 @@ export class Transcript {
     return this.lines
   }
 
+  get(id: string): ChatLine | undefined {
+    return this.lines.find((line) => line.id === id)
+  }
+
   has(id: string): boolean {
     return this.seen.has(id)
   }
@@ -56,11 +60,19 @@ export class Transcript {
     return line
   }
 
-  patchDelivery(id: string, delivery: Delivery): ChatLine | null {
+  patchDelivery(id: string, delivery?: Delivery): ChatLine | null {
     const index = this.lines.findIndex((line) => line.id === id)
     const current = index >= 0 ? this.lines[index] : undefined
     if (index < 0 || !current || current.kind !== 'chat') return null
-    const next = { ...current, delivery }
+    const next = chatLine({
+      id: current.id,
+      fromId: current.fromId,
+      nick: current.nick,
+      text: current.text,
+      ts: current.ts,
+      self: current.self,
+      ...(delivery ? { delivery } : {}),
+    })
     this.lines[index] = next
     return next
   }

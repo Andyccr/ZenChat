@@ -165,6 +165,7 @@ export class App {
         nick: this.identity.nick,
         send: (text) => this.manager.sendChat(text),
         typing: () => this.manager.sendTyping(),
+        resend: (id) => this.manager.resend(id),
         onRetry: () => void this.manager.retry(),
         onShare: () => {
           const current = this.manager.current() ?? spec

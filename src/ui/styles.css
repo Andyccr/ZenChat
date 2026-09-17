@@ -463,6 +463,21 @@ textarea:focus-visible {
   font-size: 11px;
 }
 
+.bubble.self .delivery.pending {
+  opacity: 0.85;
+}
+
+.bubble.self button.delivery {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .bubble.self header,
 .bubble.self .muted {
   color: color-mix(in srgb, var(--on-accent) 74%, transparent);

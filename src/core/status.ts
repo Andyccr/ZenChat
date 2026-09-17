@@ -1,3 +1,5 @@
+import type { Life } from './session-machine'
+import { uiPhase } from './session-machine'
 import type { RelayStatus, SessionStatus, SignalStrategy } from './types'
 
 export const STATUS_COPY = {
@@ -40,4 +42,42 @@ export function waitingOrDown(strategy: SignalStrategy, relays: RelayStatus[]): 
     }
   }
   return { phase: 'connecting', detail: STATUS_COPY.waiting }
+}
+
+export function deriveStatus(input: {
+  life: Life
+  strategy: SignalStrategy
+  peerCount: number
+  relays: RelayStatus[]
+}): SessionStatus | null {
+  if (input.life.state === 'failed') return null
+  if (input.life.state === 'live') {
+    return {
+      phase: uiPhase(input.life),
+      detail: connectedDetail(input.peerCount),
+      relays: input.relays,
+      peerCount: input.peerCount,
+    }
+  }
+  const probes =
+    input.life.state === 'relay_down' && input.relays.length === 0
+      ? [{ url: 'local', readyState: 3 }]
+      : input.relays
+  const wait = waitingOrDown(input.strategy, probes)
+  return {
+    phase: wait.phase,
+    detail: input.life.state === 'joining' ? connectingDetail(input.strategy) : wait.detail,
+    relays: input.relays,
+    peerCount: input.peerCount,
+  }
+}
+
+export function sameStatus(prev: SessionStatus, next: SessionStatus): boolean {
+  return (
+    prev.phase === next.phase &&
+    prev.detail === next.detail &&
+    prev.peerCount === next.peerCount &&
+    prev.relays.length === next.relays.length &&
+    prev.relays.every((relay, i) => relay.readyState === next.relays[i]?.readyState)
+  )
 }
