@@ -24,7 +24,7 @@ export const copy = {
   placeholder: '发消息',
   members: '在线',
   you: '你',
-  waiting: '还没有同伴，把链接发给对方。',
+  waiting: '还没有同伴，把链接发给对方',
   copied: '已复制',
   shared: '已分享',
   copyFailed: '无法复制，请手动复制地址栏。',
@@ -47,4 +47,5 @@ export const copy = {
   sending: '发送中',
   undelivered: '未送达',
   resend: '点此重试',
+  typing: '输入中',
 }

@@ -1,5 +1,5 @@
 import { DEFAULT_ROOM } from '../config/app'
-import { isSignalStrategy, normalizeRoomName } from './room'
+import { isSignalStrategy, normalizeRoomName, canonicalizeSpec } from './room'
 import type { RoomSpec, SignalStrategy } from './types'
 
 export type Route =
@@ -35,13 +35,14 @@ export function parseHash(hash: string): Route {
 
 export function toHash(route: Route, includePassword = false): string {
   if (route.name === 'lobby') return '#/'
+  const spec = canonicalizeSpec(route.spec) ?? route.spec
   const params = new URLSearchParams()
-  params.set('s', route.spec.strategy)
-  if (includePassword && route.spec.password) {
-    params.set('k', route.spec.password)
+  params.set('s', spec.strategy)
+  if (includePassword && spec.password) {
+    params.set('k', spec.password)
   }
   const query = params.toString()
-  return `#/r/${encodeURIComponent(route.spec.name)}${query ? `?${query}` : ''}`
+  return `#/r/${encodeURIComponent(spec.name)}${query ? `?${query}` : ''}`
 }
 
 export function defaultRoomSpec(overrides: Partial<RoomSpec> = {}): RoomSpec {

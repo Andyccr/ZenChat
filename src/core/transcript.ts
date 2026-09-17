@@ -1,18 +1,6 @@
 import { MAX_SEEN_IDS } from '../config/app'
-import { trimLines } from './cache'
+import { durableLine, trimLines } from './cache'
 import type { ChatLine, Delivery } from './types'
-
-function dropPending(line: ChatLine): ChatLine {
-  if (line.kind !== 'chat' || line.delivery !== 'pending') return line
-  return chatLine({
-    id: line.id,
-    fromId: line.fromId,
-    nick: line.nick,
-    text: line.text,
-    ts: line.ts,
-    self: line.self,
-  })
-}
 
 export class Transcript {
   private lines: ChatLine[] = []
@@ -21,7 +9,7 @@ export class Transcript {
 
   hydrate(lines: ChatLine[]): ChatLine[] {
     this.clear()
-    this.lines = trimLines(lines.map(dropPending))
+    this.lines = trimLines(lines.map(durableLine))
     for (const line of this.lines) {
       if (line.kind === 'chat') this.remember(line.id)
     }

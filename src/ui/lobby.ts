@@ -1,4 +1,5 @@
-import { DEFAULT_ROOM } from '../config/app'
+import { DEFAULT_ROOM, MAX_NICK_LENGTH, MAX_ROOM_LENGTH } from '../config/app'
+import { canonicalizeSpec } from '../core/room'
 import type { RoomSpec, SignalStrategy } from '../core/types'
 import { canJoin } from './capability'
 import { copy } from './copy'
@@ -8,8 +9,8 @@ export function buildLobby(options: {
   nick: string
   onJoin: (input: { nick: string; spec: RoomSpec }) => void
 }): HTMLElement {
-  const nick = el('input', { maxlength: 24, value: options.nick, autocomplete: 'nickname' }) as HTMLInputElement
-  const room = el('input', { maxlength: 64, value: DEFAULT_ROOM, autocomplete: 'off' }) as HTMLInputElement
+  const nick = el('input', { maxlength: MAX_NICK_LENGTH, value: options.nick, autocomplete: 'nickname' }) as HTMLInputElement
+  const room = el('input', { maxlength: MAX_ROOM_LENGTH, value: DEFAULT_ROOM, autocomplete: 'off' }) as HTMLInputElement
   const password = el('input', { type: 'password', autocomplete: 'off' }) as HTMLInputElement
   const strategy = el('select', {}, [
     el('option', { value: 'torrent' }, [copy.torrent]),
@@ -28,14 +29,16 @@ export function buildLobby(options: {
   form.addEventListener('submit', (event) => {
     event.preventDefault()
     if (!canJoin()) return
-    options.onJoin({
-      nick: nick.value,
-      spec: {
-        name: room.value,
-        password: password.value,
-        strategy: strategy.value as SignalStrategy,
-      },
+    const spec = canonicalizeSpec({
+      name: room.value,
+      password: password.value,
+      strategy: strategy.value as SignalStrategy,
     })
+    if (!spec) {
+      room.focus()
+      return
+    }
+    options.onJoin({ nick: nick.value, spec })
   })
   return el('div', { class: 'lobby' }, [
     el('p', { class: 'lede' }, [copy.lobbyHint]),

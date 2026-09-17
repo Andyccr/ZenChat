@@ -27,4 +27,10 @@ describe('room routing', () => {
     expect(parseHash('')).toEqual({ name: 'lobby' })
     expect(parseHash('#/nope')).toEqual({ name: 'lobby' })
   })
+
+  it('writes a canonical name into the hash', () => {
+    expect(toHash({ name: 'room', spec: { name: '  茶 室  ', password: '', strategy: 'torrent' } })).toBe(
+      `#/r/${encodeURIComponent('茶-室')}?s=torrent`,
+    )
+  })
 })

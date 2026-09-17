@@ -37,4 +37,14 @@ describe('Presence', () => {
     expect(presence.prune(100).map((member) => member.id)).toEqual(['fresh'])
     expect(presence.list().map((member) => member.id)).toEqual(['stale'])
   })
+
+  it('keeps connected peer ids even when lastSeenAt is stale', () => {
+    const clock = createMemoryRuntime(1_000)
+    const presence = new Presence(clock.runtime)
+    presence.upsert('live', '晚风')
+    presence.upsert('ghost', '青石')
+    clock.advance(200)
+    expect(presence.prune(100, ['live']).map((member) => member.id)).toEqual(['ghost'])
+    expect(presence.list().map((member) => member.id)).toEqual(['live'])
+  })
 })

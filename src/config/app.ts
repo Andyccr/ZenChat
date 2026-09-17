@@ -14,5 +14,6 @@ export const HELLO_INTERVAL_MS = 25_000
 export const RELAY_POLL_MS = 5000
 export const PRESENCE_STALE_MS = HELLO_INTERVAL_MS * 3
 export const ACK_TIMEOUT_MS = 8000
+export const CACHE_DEBOUNCE_MS = 2000
 export const SOURCE_URL = 'https://github.com/Andyccr/ZenChat'
 export const PAGES_URL = 'https://andyccr.github.io/ZenChat/'

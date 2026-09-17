@@ -15,6 +15,7 @@ describe('Outbound', () => {
     expect(outbound.payload('msg-1')).toEqual({ text: 'hi' })
     expect(outbound.ack('msg-1')).toBe(true)
     expect(outbound.payload('msg-1')).toBeUndefined()
+    outbound.dispose()
   })
 
   it('clears a timer when the ack arrives first', () => {
@@ -26,5 +27,19 @@ describe('Outbound', () => {
     clock.advance(100)
     expect(expired).toEqual([])
     expect(outbound.payload('msg-2')).toBeUndefined()
+    outbound.dispose()
+  })
+
+  it('does not expire while the tab is hidden, then settles remaining time on resume', () => {
+    const clock = createMemoryRuntime(0)
+    const expired: string[] = []
+    const outbound = new Outbound(clock.runtime, 100, (id) => expired.push(id))
+    outbound.expect('msg-3', { text: 'bg' })
+    clock.setHidden(true)
+    clock.advance(250)
+    expect(expired).toEqual([])
+    clock.setHidden(false)
+    expect(expired).toEqual(['msg-3'])
+    outbound.dispose()
   })
 })
