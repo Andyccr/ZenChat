@@ -44,5 +44,7 @@ export const copy = {
   duplicateTab: '另一个标签页也开着禅聊，会显示成两个人。',
   theme: '主题',
   delivered: '送达',
+  sending: '发送中',
   undelivered: '未送达',
+  resend: '点此重试',
 }

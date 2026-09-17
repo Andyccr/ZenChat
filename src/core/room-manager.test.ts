@@ -42,17 +42,19 @@ function manager() {
 
 describe('RoomManager', () => {
   it('reuses the live session for the same room', async () => {
-    const { rm } = manager()
+    const { rm, created } = manager()
     const spec = { name: 'lobby', password: '', strategy: 'torrent' as const }
-    const first = await rm.open(spec)
-    const second = await rm.open(spec)
-    expect(second).toBe(first)
-    expect(rm.getSession()?.isJoined()).toBe(true)
+    expect(await rm.open(spec)).toBe(true)
+    const transports = created.length
+    expect(await rm.open(spec)).toBe(true)
+    expect(created).toHaveLength(transports)
+    expect(rm.isJoined()).toBe(true)
   })
 
   it('returns closed when sending without a live session', async () => {
     const { rm } = manager()
     expect(await rm.sendChat('hi')).toBe('closed')
+    expect(await rm.resend('missing')).toBe('closed')
   })
 
   it('retries after a failed join instead of sticking on the dead session', async () => {
@@ -68,10 +70,10 @@ describe('RoomManager', () => {
     })
     const spec = { name: 'lobby', password: '', strategy: 'torrent' as const }
     await expect(rm.open(spec)).rejects.toThrow('offline')
-    expect(rm.getSession()?.isJoined()).toBe(false)
+    expect(rm.isJoined()).toBe(false)
     fail = false
     await rm.open(spec)
-    expect(rm.getSession()?.isJoined()).toBe(true)
+    expect(rm.isJoined()).toBe(true)
   })
 
   it('drops a superseded join when switching rooms mid-handshake', async () => {
@@ -95,8 +97,9 @@ describe('RoomManager', () => {
     const second = rm.open({ name: 'two', password: '', strategy: 'torrent' })
     release()
     const [stale, live] = await Promise.all([first, second])
-    expect(stale).toBeNull()
-    expect(live?.isJoined()).toBe(true)
+    expect(stale).toBe(false)
+    expect(live).toBe(true)
+    expect(rm.isJoined()).toBe(true)
     expect(rm.current()?.name).toBe('two')
   })
 })

@@ -20,11 +20,28 @@ export function loadRoomLog(spec: RoomSpec): ChatLine[] {
   }
 }
 
+export function durableLines(lines: ChatLine[]): ChatLine[] {
+  return trimLines(lines.map(dropPendingDelivery))
+}
+
 export function saveRoomLog(spec: RoomSpec, lines: ChatLine[]): void {
   try {
-    sessionStorage.setItem(cacheKey(spec), JSON.stringify(lines.slice(-MAX_LOG_LINES)))
+    sessionStorage.setItem(cacheKey(spec), JSON.stringify(durableLines(lines)))
   } catch {
     // Quota errors are non-fatal; the live session still works.
+  }
+}
+
+function dropPendingDelivery(line: ChatLine): ChatLine {
+  if (line.kind !== 'chat' || line.delivery !== 'pending') return line
+  return {
+    kind: 'chat',
+    id: line.id,
+    fromId: line.fromId,
+    nick: line.nick,
+    text: line.text,
+    ts: line.ts,
+    self: line.self,
   }
 }
 

@@ -14,11 +14,12 @@ export type ChatPaneHandlers = {
   onShare: () => void
   onSwitchSignal: () => void
   onNick: (nick: string) => void
+  resend: (id: string) => Promise<SendResult>
 }
 
 export class ChatPane {
   readonly root: HTMLElement
-  readonly log = new LogView()
+  readonly log: LogView
   private statusEl: HTMLElement
   private actionsEl: HTMLElement
   private membersEl: HTMLElement
@@ -31,6 +32,9 @@ export class ChatPane {
   private lastPeerCount = 0
 
   constructor(private handlers: ChatPaneHandlers) {
+    this.log = new LogView((id) => {
+      void this.handlers.resend(id)
+    })
     this.statusEl = el('div', { class: 'status' })
     this.actionsEl = el('div', { class: 'status-actions' })
     this.membersEl = el('div', { class: 'members' })

@@ -9,7 +9,7 @@ export class LogView {
   private ids = new Set<string>()
   private nodes = new Map<string, HTMLElement>()
 
-  constructor() {
+  constructor(private onResend?: (id: string) => void) {
     this.el = el('div', { class: 'log', role: 'log', 'aria-live': 'polite' })
   }
 
@@ -31,7 +31,7 @@ export class LogView {
       return
     }
     this.ids.add(line.id)
-    const node = renderLine(line)
+    const node = this.render(line)
     this.nodes.set(line.id, node)
     this.el.append(node)
     if (stick) this.stick()
@@ -40,9 +40,13 @@ export class LogView {
   private replace(line: ChatLine): void {
     const previous = this.nodes.get(line.id)
     if (!previous) return
-    const next = renderLine(line)
+    const next = this.render(line)
     this.nodes.set(line.id, next)
     previous.replaceWith(next)
+  }
+
+  private render(line: ChatLine): HTMLElement {
+    return renderLine(line, this.onResend)
   }
 
   private stick(): void {
@@ -54,17 +58,12 @@ export class LogView {
   }
 }
 
-function renderLine(line: ChatLine): HTMLElement {
+function renderLine(line: ChatLine, onResend?: (id: string) => void): HTMLElement {
   if (line.kind === 'system') {
     return el('div', { class: 'system', 'data-id': line.id }, [line.text])
   }
   const stamp = isStamp(line.text)
-  const mark =
-    line.self && line.delivery === 'acked'
-      ? el('span', { class: 'delivery' }, [copy.delivered])
-      : line.self && line.delivery === 'failed'
-        ? el('span', { class: 'delivery fail' }, [copy.undelivered])
-        : null
+  const mark = deliveryMark(line, onResend)
   const header = el('header', {}, [
     el('b', { style: `color:${colorFromId(line.fromId)}` }, [line.nick]),
     el('time', {}, [formatTime(line.ts)]),
@@ -74,4 +73,16 @@ function renderLine(line: ChatLine): HTMLElement {
     header,
     el('p', {}, [line.text]),
   ])
+}
+
+function deliveryMark(line: Extract<ChatLine, { kind: 'chat' }>, onResend?: (id: string) => void): HTMLElement | null {
+  if (!line.self || !line.delivery) return null
+  if (line.delivery === 'acked') return el('span', { class: 'delivery' }, [copy.delivered])
+  if (line.delivery === 'pending') return el('span', { class: 'delivery pending' }, [copy.sending])
+  const button = el('button', { class: 'delivery fail', type: 'button', title: copy.resend }, [copy.undelivered])
+  button.addEventListener('click', (event) => {
+    event.stopPropagation()
+    onResend?.(line.id)
+  })
+  return button
 }

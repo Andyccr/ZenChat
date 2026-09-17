@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createAckPayload, createHelloPayload, createTypingPayload } from './protocol'
 import { createMemoryRuntime } from './runtime'
 import { ChatSession } from './session'
+import { chatLine } from './transcript'
 import { FakeTransport } from './transports/fake'
 import type { ChatLine, Member, SessionStatus } from './types'
 
@@ -136,5 +137,51 @@ describe('ChatSession', () => {
     transport().relayStates = [{ url: 'wss://tracker.invalid', readyState: 3 }]
     clock.advance(5000)
     expect(statuses.at(-1)).toMatchObject({ phase: 'error', detail: 'Tracker 连不上，可改用 Nostr' })
+  })
+
+  it('resends a failed line and accepts a late ack', async () => {
+    const { session, clock, lines, transport } = harness()
+    await session.join(spec)
+    transport().payload('peer-b', createHelloPayload('青石'))
+    await session.sendChat('第一句')
+    const pending = [...lines].reverse().find((line) => line.kind === 'chat' && line.self)
+    expect(pending).toMatchObject({ delivery: 'pending' })
+    clock.advance(8000)
+    expect([...lines].reverse().find((line) => line.kind === 'chat' && line.self)).toMatchObject({ delivery: 'failed' })
+
+    expect(await session.resend(pending && pending.kind === 'chat' ? pending.id : '')).toBe('sent')
+    const again = [...lines].reverse().find((line) => line.kind === 'chat' && line.self)
+    expect(again).toMatchObject({ delivery: 'pending' })
+    transport().payload('peer-b', createAckPayload('青石', pending && pending.kind === 'chat' ? pending.id : ''))
+    expect([...lines].reverse().find((line) => line.kind === 'chat' && line.self)).toMatchObject({ delivery: 'acked' })
+  })
+
+  it('prunes a peer that stopped announcing', async () => {
+    const { session, clock, lines, transport } = harness()
+    await session.join(spec)
+    transport().peerJoin('peer-gone')
+    transport().payload('peer-gone', createHelloPayload('青石'))
+    clock.advance(80_000)
+    expect(lines.some((line) => line.kind === 'system' && line.text.includes('离开'))).toBe(true)
+  })
+
+  it('resends a failed line restored from cache', async () => {
+    const { session, lines, transport } = harness()
+    session.hydrate([
+      chatLine({
+        id: 'aabbccdd12345678',
+        fromId: 'local',
+        nick: '晚风',
+        text: '旧信',
+        ts: 1,
+        self: true,
+        delivery: 'failed',
+      }),
+    ])
+    await session.join(spec)
+    transport().payload('peer-b', createHelloPayload('青石'))
+    expect(await session.resend('aabbccdd12345678')).toBe('sent')
+    expect(transport().sent.some((item) => (item.payload as { id?: string }).id === 'aabbccdd12345678')).toBe(true)
+    expect(lines.some((line) => line.kind === 'chat' && line.id === 'aabbccdd12345678' && line.delivery === 'pending')).toBe(true)
   })
 })

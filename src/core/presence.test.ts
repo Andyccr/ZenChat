@@ -26,4 +26,15 @@ describe('Presence', () => {
     expect(presence.remove('p1')?.nick).toBe('晚风')
     expect(presence.list()).toEqual([])
   })
+
+  it('prunes members whose lastSeenAt is older than the stale window', () => {
+    const clock = createMemoryRuntime(1_000)
+    const presence = new Presence(clock.runtime)
+    presence.upsert('fresh', '晚风')
+    clock.advance(80)
+    presence.upsert('stale', '青石')
+    clock.advance(30)
+    expect(presence.prune(100).map((member) => member.id)).toEqual(['fresh'])
+    expect(presence.list().map((member) => member.id)).toEqual(['stale'])
+  })
 })

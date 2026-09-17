@@ -26,4 +26,16 @@ describe('room log cache', () => {
     saveRoomLog(spec, lines)
     expect(loadRoomLog(spec)).toEqual(lines)
   })
+
+  it('strips in-flight pending markers but keeps failed delivery', () => {
+    const spec = { name: 'lobby', password: '', strategy: 'torrent' as const }
+    saveRoomLog(spec, [
+      { kind: 'chat', id: 'p1', fromId: 'me', nick: '晚风', text: 'hi', ts: 1, self: true, delivery: 'pending' },
+      { kind: 'chat', id: 'f1', fromId: 'me', nick: '晚风', text: 'bye', ts: 2, self: true, delivery: 'failed' },
+    ])
+    expect(loadRoomLog(spec)).toEqual([
+      { kind: 'chat', id: 'p1', fromId: 'me', nick: '晚风', text: 'hi', ts: 1, self: true },
+      { kind: 'chat', id: 'f1', fromId: 'me', nick: '晚风', text: 'bye', ts: 2, self: true, delivery: 'failed' },
+    ])
+  })
 })

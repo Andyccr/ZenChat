@@ -22,8 +22,8 @@ export class RoomManager {
     return this.spec
   }
 
-  getSession(): ChatSession | null {
-    return this.session
+  isJoined(): boolean {
+    return this.session?.isJoined() ?? false
   }
 
   selfId(): string {
@@ -34,13 +34,17 @@ export class RoomManager {
     return this.session?.sendChat(text) ?? Promise.resolve('closed')
   }
 
+  resend(id: string): Promise<SendResult> {
+    return this.session?.resend(id) ?? Promise.resolve('closed')
+  }
+
   sendTyping(): void {
     this.session?.sendTyping()
   }
 
-  retry(): Promise<ChatSession | null> {
+  retry(): Promise<boolean> {
     const spec = this.spec
-    if (!spec) return Promise.resolve(null)
+    if (!spec) return Promise.resolve(false)
     return this.open(spec, true)
   }
 
@@ -49,14 +53,14 @@ export class RoomManager {
     this.session?.setNick(identity.nick)
   }
 
-  async open(spec: RoomSpec, force = false): Promise<ChatSession | null> {
+  async open(spec: RoomSpec, force = false): Promise<boolean> {
     if (!force && this.spec && this.session?.isJoined() && sameRoom(this.spec, spec)) {
-      return this.session
+      return true
     }
 
     const token = ++this.generation
     await this.snapshotAndClose()
-    if (token !== this.generation) return null
+    if (token !== this.generation) return false
 
     rememberRoom(spec)
     this.listeners.onMembers?.([])
@@ -72,15 +76,15 @@ export class RoomManager {
     } catch (error) {
       if (token !== this.generation) {
         await session.leave({ silent: true })
-        return null
+        return false
       }
       throw error
     }
     if (token !== this.generation) {
       await session.leave({ silent: true })
-      return null
+      return false
     }
-    return session
+    return true
   }
 
   async close(): Promise<void> {

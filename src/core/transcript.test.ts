@@ -29,11 +29,15 @@ describe('Transcript', () => {
     expect(ids.has(`seen-${MAX_SEEN_IDS + 9}`)).toBe(true)
   })
 
-  it('drops pending delivery when hydrating a cached log', () => {
+  it('drops pending delivery when hydrating a cached log but keeps failed lines', () => {
     const log = new Transcript()
-    log.hydrate([chatLine({ id: 'aabbccdd', fromId: 'me', nick: '晚风', text: 'hi', ts: 1, self: true, delivery: 'pending' })])
-    const row = log.snapshot()[0]
-    expect(row).toMatchObject({ kind: 'chat', id: 'aabbccdd', text: 'hi' })
-    expect(row && row.kind === 'chat' ? row.delivery : 'missing').toBeUndefined()
+    log.hydrate([
+      chatLine({ id: 'aabbccdd', fromId: 'me', nick: '晚风', text: 'hi', ts: 1, self: true, delivery: 'pending' }),
+      chatLine({ id: 'eeff0011', fromId: 'me', nick: '晚风', text: 'retry', ts: 2, self: true, delivery: 'failed' }),
+    ])
+    const [pending, failed] = log.snapshot()
+    expect(pending && pending.kind === 'chat' ? pending.delivery : 'missing').toBeUndefined()
+    expect(failed).toMatchObject({ kind: 'chat', id: 'eeff0011', delivery: 'failed' })
+    expect(log.get('eeff0011')).toMatchObject({ text: 'retry' })
   })
 })
