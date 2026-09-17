@@ -17,6 +17,8 @@ flowchart LR
     RM[RoomManager]
     CS[ChatSession]
     SM[SessionMachine]
+    HB[Heartbeat]
+    PR[PayloadRouter]
     OB[Outbound]
     P[Presence]
     L[Transcript]
@@ -34,10 +36,12 @@ flowchart LR
   end
 
   UI --> RM --> CS
-  CS --> SM[SessionMachine]
-  CS --> OB[Outbound]
-  CS --> P[Presence]
-  CS --> L[Transcript]
+  CS --> SM
+  CS --> HB
+  CS --> PR
+  CS --> OB
+  CS --> P
+  CS --> L
   CS --> TR
 
   TR -->|"SDP / ICE (signalling only)"| WT
@@ -48,12 +52,14 @@ flowchart LR
 
 | Layer / 层 | Role / 职责 |
 |---|---|
-| UI Shell | Lobby, tabs, theme. Chat pane is a separate view; shell does not remount on switch. |
-| RoomManager | Room lifecycle, log cache, skip reconnect if the same room is already joined. |
-| ChatSession | Thin orchestrator: transport in, machine + outbound + presence + transcript out. |
-| SessionMachine | Pure join/wait/live/error transitions. |
-| Outbound | Delivery timers. Peers that advertise `ack` in hello get a receipt. |
-| Presence / Transcript | Members + typing TTL; capped message log and dedupe ids. |
+| UI Shell | Lobby, tabs, theme. Chat pane is a separate view; shell does not remount on switch. Failed self lines are tappable to resend. |
+| RoomManager | Room lifecycle, durable log cache, skip reconnect if the same room is already joined. UI never reaches into `ChatSession`. |
+| ChatSession | Thin orchestrator: transport in, machine + heartbeat + router + outbound + presence + transcript out. |
+| SessionMachine | Pure join/wait/live/error transitions. Status copy is derived from the machine. |
+| Heartbeat | Hello interval, relay/RTT poll, visibility pause, stale presence prune. |
+| PayloadRouter | Decode v1 hello/typing/ack/chat; session only applies effects. |
+| Outbound | Delivery timers plus the original payload so a late ack or tap-to-resend can settle. Peers that advertise `ack` in hello get a receipt. |
+| Presence / Transcript | Members + typing TTL + last-seen prune; capped message log, dedupe ids, durable hydrate (drop pending, keep failed). |
 | Transport factory | Default Trystero torrent/nostr. Tests inject a fake. A `Libp2pTransport` can plug in here. |
 | DataChannel | Encrypted chat after ICE succeeds. Trackers never see plaintext. |
 

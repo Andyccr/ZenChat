@@ -1,7 +1,8 @@
 import type { Runtime } from './runtime'
 
-export class Outbound {
+export class Outbound<T = unknown> {
   private timers = new Map<string, number>()
+  private payloads = new Map<string, T>()
 
   constructor(
     private runtime: Pick<Runtime, 'setTimeout' | 'clearTimeout'>,
@@ -9,8 +10,9 @@ export class Outbound {
     private onExpire: (id: string) => void,
   ) {}
 
-  expect(id: string): void {
-    this.cancel(id)
+  expect(id: string, payload?: T): void {
+    this.cancelTimer(id)
+    if (payload !== undefined) this.payloads.set(id, payload)
     this.timers.set(
       id,
       this.runtime.setTimeout(() => {
@@ -21,18 +23,27 @@ export class Outbound {
   }
 
   ack(id: string): boolean {
-    if (!this.timers.has(id)) return false
+    if (!this.timers.has(id) && !this.payloads.has(id)) return false
     this.cancel(id)
     return true
   }
 
+  payload(id: string): T | undefined {
+    return this.payloads.get(id)
+  }
+
   cancel(id: string): void {
-    const timer = this.timers.get(id)
-    if (timer !== undefined) this.runtime.clearTimeout(timer)
-    this.timers.delete(id)
+    this.cancelTimer(id)
+    this.payloads.delete(id)
   }
 
   clear(): void {
-    for (const id of [...this.timers.keys()]) this.cancel(id)
+    for (const id of [...this.timers.keys(), ...this.payloads.keys()]) this.cancel(id)
+  }
+
+  private cancelTimer(id: string): void {
+    const timer = this.timers.get(id)
+    if (timer !== undefined) this.runtime.clearTimeout(timer)
+    this.timers.delete(id)
   }
 }
