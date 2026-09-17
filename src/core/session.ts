@@ -2,7 +2,7 @@ import { ACK_TIMEOUT_MS, APP_ID, HELLO_INTERVAL_MS, PRESENCE_STALE_MS, RELAY_POL
 import { Heartbeat } from './heartbeat'
 import { randomHex } from './identity'
 import { Outbound } from './outbound'
-import { decodeIncoming } from './payload-router'
+import { applyIncoming } from './payload-router'
 import { Presence } from './presence'
 import {
   createAckPayload,
@@ -47,6 +47,8 @@ export class ChatSession {
   private life: Life = idleLife()
   private strategy: SignalStrategy = 'torrent'
   private joinErrors = 0
+  private epoch = 0
+  private sendTypingThrottled: () => void
   private status: SessionStatus = {
     phase: 'idle',
     detail: STATUS_COPY.idle,
@@ -57,11 +59,6 @@ export class ChatSession {
   private readonly emitMembers = rafBatch(() => {
     this.listeners.onMembers?.(this.presence.list())
   })
-
-  private readonly sendTypingThrottled = throttle(() => {
-    if (!this.isJoined()) return
-    void this.transport.send(createTypingPayload(this.identity.nick))
-  }, TYPING_THROTTLE_MS)
 
   constructor(identity: Identity, listeners: SessionListener, options: SessionOptions = {}) {
     this.identity = identity
@@ -75,6 +72,10 @@ export class ChatSession {
       onHello: () => this.announce(),
       onPoll: () => this.poll(),
     })
+    this.sendTypingThrottled = throttle(() => {
+      if (!this.isJoined()) return
+      void this.transport.send(createTypingPayload(this.identity.nick))
+    }, TYPING_THROTTLE_MS, () => this.runtime.now())
   }
 
   get selfId(): string {
@@ -94,17 +95,18 @@ export class ChatSession {
   }
 
   async join(spec: RoomSpec): Promise<void> {
-    if (this.isJoined()) await this.leave({ silent: true })
+    await this.teardown(false)
     this.strategy = spec.strategy
     this.joinErrors = 0
     this.transport = this.createTransport(spec.strategy)
-    this.life = reduceLife(this.life, { type: 'join' })
+    this.life = reduceLife(idleLife(), { type: 'join' })
     this.setStatus({
       phase: 'connecting',
       detail: connectingDetail(spec.strategy),
       relays: [],
       peerCount: 0,
     })
+    const token = this.epoch
 
     try {
       await this.transport.join(
@@ -118,14 +120,21 @@ export class ChatSession {
           onPeerJoin: (peerId) => this.onPeerJoin(peerId),
           onPeerLeave: (peerId) => this.onPeerLeave(peerId),
           onPayload: (peerId, payload) => this.handlePayload(peerId, payload),
-          onJoinError: () => this.onJoinError(),
+          onJoinError: (detail) => this.onJoinError(detail),
         },
       )
     } catch (error) {
+      if (token !== this.epoch) return
       this.life = reduceLife(this.life, { type: 'join_err' })
+      await this.teardown(false)
       const detail = error instanceof Error ? error.message : '连接失败'
       this.refreshStatus('error', startFailedDetail(detail))
       throw error
+    }
+
+    if (token !== this.epoch) {
+      await this.transport.leave()
+      return
     }
 
     this.life = reduceLife(this.life, { type: 'join_ok' })
@@ -162,11 +171,7 @@ export class ChatSession {
 
   async leave(options: { silent?: boolean } = {}): Promise<void> {
     this.life = reduceLife(this.life, { type: 'leave' })
-    this.heartbeat.stop()
-    this.outbound.clear()
-    this.presence.clear()
-    await this.transport.leave()
-    this.transcript.clear()
+    await this.teardown(true)
     this.life = reduceLife(this.life, { type: 'left' })
     if (!options.silent) {
       this.setStatus({ phase: 'idle', detail: STATUS_COPY.left, relays: [], peerCount: 0 })
@@ -175,7 +180,22 @@ export class ChatSession {
     }
   }
 
+  private async teardown(wipeLog: boolean): Promise<void> {
+    this.epoch += 1
+    this.heartbeat.stop()
+    this.outbound.dispose()
+    this.outbound = new Outbound(this.runtime, ACK_TIMEOUT_MS, (id) => this.expireAck(id))
+    this.presence.clear()
+    await this.transport.leave()
+    if (wipeLog) this.transcript.clear()
+  }
+
+  private live(token: number): boolean {
+    return token === this.epoch && this.isJoined()
+  }
+
   private async dispatch(payload: ChatPayload, expectAck: boolean, replace = false): Promise<SendResult> {
+    const token = this.epoch
     if (replace) this.patchDelivery(payload.id, expectAck ? 'pending' : undefined)
     else {
       this.pushLine(
@@ -193,74 +213,82 @@ export class ChatSession {
     try {
       await this.transport.send(payload)
     } catch {
+      if (!this.live(token)) return 'closed'
       this.patchDelivery(payload.id, 'failed')
       this.pushSystem(STATUS_COPY.sendFailed)
       return 'failed'
     }
+    if (!this.live(token)) return 'closed'
     if (expectAck) this.outbound.expect(payload.id, payload)
     return 'sent'
   }
 
   private handlePayload(peerId: string, raw: unknown): void {
-    const incoming = decodeIncoming(raw, (id) => this.transcript.has(id))
-    if (!incoming) return
-    if (incoming.type === 'hello') this.presence.upsert(peerId, incoming.nick, incoming.features)
-    else this.presence.upsert(peerId, incoming.nick)
-
-    if (incoming.type === 'hello') {
-      this.emitMembers()
-      return
-    }
-    if (incoming.type === 'typing') {
-      this.presence.markTyping(peerId)
-      this.emitMembers()
-      return
-    }
-    if (incoming.type === 'ack') {
-      if (this.outbound.ack(incoming.id)) this.patchDelivery(incoming.id, 'acked')
-      return
-    }
-    if (incoming.duplicate) {
-      void this.transport.send(createAckPayload(this.identity.nick, incoming.id), peerId)
-      return
-    }
-    this.pushLine(
-      chatLine({
-        id: incoming.id,
-        fromId: peerId,
-        nick: incoming.nick,
-        text: incoming.text,
-        ts: incoming.ts,
-        self: false,
-      }),
-    )
-    void this.transport.send(createAckPayload(this.identity.nick, incoming.id), peerId)
-    this.emitMembers()
+    if (!this.isJoined()) return
+    applyIncoming(peerId, raw, (id) => this.transcript.has(id), {
+      hello: (id, nick, features) => {
+        this.presence.upsert(id, nick, features)
+        this.emitMembers()
+      },
+      typing: (id, nick) => {
+        this.presence.upsert(id, nick)
+        this.presence.markTyping(id)
+        this.emitMembers()
+      },
+      ack: (id, messageId, nick) => {
+        this.presence.upsert(id, nick)
+        if (this.outbound.ack(messageId)) this.patchDelivery(messageId, 'acked')
+      },
+      chat: (id, incoming) => {
+        this.presence.upsert(id, incoming.nick)
+        if (incoming.duplicate) {
+          void this.transport.send(createAckPayload(this.identity.nick, incoming.id), id)
+          return
+        }
+        this.pushLine(
+          chatLine({
+            id: incoming.id,
+            fromId: id,
+            nick: incoming.nick,
+            text: incoming.text,
+            ts: incoming.ts,
+            self: false,
+          }),
+        )
+        void this.transport.send(createAckPayload(this.identity.nick, incoming.id), id)
+        this.emitMembers()
+      },
+    })
   }
 
   private onPeerJoin(peerId: string): void {
+    if (!this.isJoined()) return
+    const token = this.epoch
     this.presence.upsert(peerId, '访客')
     this.pushSystem(`${peerId.slice(0, 6)} 加入了房间`)
     void this.transport.send(createHelloPayload(this.identity.nick), peerId)
     this.emitMembers()
     this.notePeers()
-    this.runtime.setTimeout(() => void this.measure(peerId), 350)
+    this.runtime.setTimeout(() => {
+      if (this.live(token)) void this.measure(peerId)
+    }, 350)
   }
 
   private onPeerLeave(peerId: string): void {
+    if (!this.isJoined()) return
     const member = this.presence.remove(peerId)
     this.pushSystem(`${member?.nick ?? peerId.slice(0, 6)} 离开了房间`)
     this.emitMembers()
     this.notePeers()
   }
 
-  private onJoinError(): void {
+  private onJoinError(detail: string): void {
     this.joinErrors += 1
     if (this.transport.peerIds().length > 0) return
     if (this.joinErrors >= 3) {
       this.life = reduceLife(this.life, { type: 'force_down' })
       this.emitStatus()
-    } else this.refreshStatus('connecting', STATUS_COPY.handshake)
+    } else this.refreshStatus('connecting', detail ? `${STATUS_COPY.handshake}（${detail}）` : STATUS_COPY.handshake)
   }
 
   private expireAck(id: string): void {
@@ -290,7 +318,7 @@ export class ChatSession {
 
   private poll(): void {
     if (!this.isJoined()) return
-    const gone = this.presence.prune(PRESENCE_STALE_MS)
+    const gone = this.presence.prune(PRESENCE_STALE_MS, this.transport.peerIds())
     for (const member of gone) this.pushSystem(`${member.nick} 离开了房间`)
     if (gone.length > 0) this.emitMembers()
     this.notePeers()

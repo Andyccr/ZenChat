@@ -31,3 +31,9 @@ export function sessionKey(spec: RoomSpec): string {
 export function sameRoom(a: RoomSpec, b: RoomSpec): boolean {
   return sessionKey(a) === sessionKey(b)
 }
+
+export function canonicalizeSpec(spec: RoomSpec): RoomSpec | null {
+  const name = normalizeRoomName(spec.name)
+  if (!name) return null
+  return { name, password: spec.password, strategy: spec.strategy }
+}

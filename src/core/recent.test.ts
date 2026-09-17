@@ -37,6 +37,11 @@ describe('recent rooms', () => {
     expect(list).toHaveLength(2)
   })
 
+  it('stores a canonical room name', () => {
+    rememberRoom({ name: '  茶 室  ', password: '', strategy: 'torrent' })
+    expect(loadRecentRooms()[0]).toMatchObject({ name: '茶-室', strategy: 'torrent' })
+  })
+
   it('asks for a password when a locked recent room has no stored secret', () => {
     rememberRoom({ name: 'vault', password: 'x', strategy: 'torrent' })
     expect(specFromRecent(loadRecentRooms()[0]!)).toBe('need-password')

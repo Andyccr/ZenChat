@@ -2,6 +2,7 @@ import { SOURCE_URL } from '../config/app'
 import { loadIdentity, persistNick } from '../core/identity'
 import { RoomManager } from '../core/room-manager'
 import { parseHash, toHash } from '../core/router'
+import { canonicalizeSpec } from '../core/room'
 import { rememberSecret, withSecret } from '../core/secrets'
 import { watchDuplicateTab } from '../core/tab-guard'
 import type { RoomSpec, ThemePreference } from '../core/types'
@@ -28,7 +29,6 @@ export class App {
   private dupBanner: HTMLElement
   private chat: ChatPane | null = null
   private lobbyEl: HTMLElement | null = null
-  private routing = false
   private stopTabWatch: (() => void) | null = null
 
   constructor(root: HTMLElement) {
@@ -58,7 +58,7 @@ export class App {
     this.stopTabWatch = watchDuplicateTab(() => this.dupBanner.classList.remove('hidden'))
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applyTheme(this.theme))
     window.addEventListener('hashchange', () => {
-      if (!this.routing) void this.route()
+      void this.route()
     })
     window.addEventListener('pagehide', () => {
       this.stopTabWatch?.()
@@ -120,24 +120,21 @@ export class App {
     rememberSecret(spec)
     const clean = toHash({ name: 'room', spec }, false)
     if (spec.password && location.hash !== clean) {
-      this.routing = true
       history.replaceState(null, '', `${location.pathname}${location.search}${clean}`)
-      this.routing = false
     }
     return spec
   }
 
   private go(spec: RoomSpec): void {
-    rememberSecret(spec)
-    const next = toHash({ name: 'room', spec }, false)
+    const clean = canonicalizeSpec(spec)
+    if (!clean) return
+    rememberSecret(clean)
+    const next = toHash({ name: 'room', spec: clean }, false)
     if (location.hash === next) {
-      void this.showChat(spec)
+      void this.showChat(clean)
       return
     }
-    this.routing = true
     location.hash = next
-    this.routing = false
-    void this.showChat(spec)
   }
 
   private showLobby(): void {
@@ -192,14 +189,8 @@ export class App {
     this.refreshChrome(spec)
     try {
       await this.manager.open(spec)
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : '连接失败'
-      this.chat.status({
-        phase: 'error',
-        detail: `无法启动 P2P：${detail}`,
-        relays: [],
-        peerCount: 0,
-      })
+    } catch {
+      // ChatSession already emitted the error status, including live relays.
     }
   }
 

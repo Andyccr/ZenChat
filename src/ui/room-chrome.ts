@@ -1,5 +1,5 @@
 import { loadRecentRooms, specFromRecent, type RecentRoom } from '../core/recent'
-import { normalizeRoomName } from '../core/room'
+import { recentRoomKey } from '../core/room'
 import { toHash } from '../core/router'
 import { roomUrl, shareOrCopy } from '../core/share'
 import type { RoomSpec } from '../core/types'
@@ -17,7 +17,7 @@ export function renderTabs(
 ): void {
   empty(nav)
   for (const item of loadRecentRooms()) {
-    const current = Boolean(active && item.name === normalizeRoomName(active.name) && item.strategy === active.strategy)
+    const current = Boolean(active && recentRoomKey(item) === recentRoomKey(active))
     const label = item.hasPassword
       ? [item.name, el('span', { class: 'lock', title: copy.locked }, ['锁'])]
       : [item.name]

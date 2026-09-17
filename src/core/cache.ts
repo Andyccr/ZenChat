@@ -20,20 +20,20 @@ export function loadRoomLog(spec: RoomSpec): ChatLine[] {
   }
 }
 
-export function durableLines(lines: ChatLine[]): ChatLine[] {
-  return trimLines(lines.map(dropPendingDelivery))
-}
-
-export function saveRoomLog(spec: RoomSpec, lines: ChatLine[]): void {
-  try {
-    sessionStorage.setItem(cacheKey(spec), JSON.stringify(durableLines(lines)))
-  } catch {
-    // Quota errors are non-fatal; the live session still works.
+export function durableLine(line: ChatLine): ChatLine {
+  if (line.kind !== 'chat') return line
+  if (line.delivery !== 'pending' && line.delivery !== 'acked' && line.delivery !== 'failed') {
+    return {
+      kind: 'chat',
+      id: line.id,
+      fromId: line.fromId,
+      nick: line.nick,
+      text: line.text,
+      ts: line.ts,
+      self: line.self,
+    }
   }
-}
-
-function dropPendingDelivery(line: ChatLine): ChatLine {
-  if (line.kind !== 'chat' || line.delivery !== 'pending') return line
+  if (line.delivery !== 'pending') return line
   return {
     kind: 'chat',
     id: line.id,
@@ -42,6 +42,18 @@ function dropPendingDelivery(line: ChatLine): ChatLine {
     text: line.text,
     ts: line.ts,
     self: line.self,
+  }
+}
+
+export function durableLines(lines: ChatLine[]): ChatLine[] {
+  return trimLines(lines.map(durableLine))
+}
+
+export function saveRoomLog(spec: RoomSpec, lines: ChatLine[]): void {
+  try {
+    sessionStorage.setItem(cacheKey(spec), JSON.stringify(durableLines(lines)))
+  } catch {
+    // Quota errors are non-fatal; the live session still works.
   }
 }
 
@@ -62,7 +74,8 @@ function isChatLine(value: unknown): value is ChatLine {
       typeof row.nick === 'string' &&
       typeof row.text === 'string' &&
       typeof row.ts === 'number' &&
-      typeof row.self === 'boolean'
+      typeof row.self === 'boolean' &&
+      (row.delivery === undefined || row.delivery === 'pending' || row.delivery === 'acked' || row.delivery === 'failed')
     )
   }
   return false

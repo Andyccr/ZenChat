@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import { CACHE_DEBOUNCE_MS } from '../config/app'
+import { loadRoomLog } from './cache'
 import { RoomManager } from './room-manager'
 import { createMemoryRuntime } from './runtime'
 import { FakeTransport } from './transports/fake'
@@ -37,7 +39,7 @@ function manager() {
       },
     },
   )
-  return { rm, created, resets }
+  return { rm, created, resets, clock }
 }
 
 describe('RoomManager', () => {
@@ -101,5 +103,16 @@ describe('RoomManager', () => {
     expect(live).toBe(true)
     expect(rm.isJoined()).toBe(true)
     expect(rm.current()?.name).toBe('two')
+  })
+
+  it('rejects an empty room name and snapshots chat after the debounce window', async () => {
+    const { rm, clock } = manager()
+    expect(await rm.open({ name: '   ', password: '', strategy: 'torrent' })).toBe(false)
+    const spec = { name: 'lobby', password: '', strategy: 'torrent' as const }
+    await rm.open(spec)
+    await rm.sendChat('hi')
+    expect(loadRoomLog(spec)).toEqual([])
+    clock.advance(CACHE_DEBOUNCE_MS)
+    expect(loadRoomLog(spec).some((line) => line.kind === 'chat' && line.text === 'hi')).toBe(true)
   })
 })
