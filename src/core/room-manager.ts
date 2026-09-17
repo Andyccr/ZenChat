@@ -1,20 +1,23 @@
+import { CACHE_DEBOUNCE_MS } from '../config/app'
 import { loadRoomLog, saveRoomLog } from './cache'
 import { rememberRoom } from './recent'
-import { sameRoom } from './room'
+import { canonicalizeSpec, sameRoom } from './room'
+import { browserRuntime } from './runtime'
 import { ChatSession, type SessionListener, type SessionOptions } from './session'
 import type { Identity, RoomSpec, SendResult } from './types'
 
 export class RoomManager {
   private identity: Identity
-  private listeners: SessionListener
+  private emit: SessionListener
   private options: SessionOptions
   private session: ChatSession | null = null
   private spec: RoomSpec | null = null
   private generation = 0
+  private saveTimer: number | null = null
 
   constructor(identity: Identity, listeners: SessionListener, options: SessionOptions = {}) {
     this.identity = identity
-    this.listeners = listeners
+    this.emit = listeners
     this.options = options
   }
 
@@ -54,7 +57,9 @@ export class RoomManager {
   }
 
   async open(spec: RoomSpec, force = false): Promise<boolean> {
-    if (!force && this.spec && this.session?.isJoined() && sameRoom(this.spec, spec)) {
+    const clean = canonicalizeSpec(spec)
+    if (!clean) return false
+    if (!force && this.spec && this.session?.isJoined() && sameRoom(this.spec, clean)) {
       return true
     }
 
@@ -62,29 +67,26 @@ export class RoomManager {
     await this.snapshotAndClose()
     if (token !== this.generation) return false
 
-    rememberRoom(spec)
-    this.listeners.onMembers?.([])
-    const session = new ChatSession(this.identity, this.listeners, this.options)
-    const cached = loadRoomLog(spec)
+    rememberRoom(clean)
+    this.emit.onMembers?.([])
+    const session = new ChatSession(this.identity, this.boundListeners(), this.options)
+    const cached = loadRoomLog(clean)
     if (cached.length > 0) session.hydrate(cached)
-    else this.listeners.onReset?.([])
+    else this.emit.onReset?.([])
 
     this.session = session
-    this.spec = spec
+    this.spec = clean
     try {
-      await session.join(spec)
+      await session.join(clean)
     } catch (error) {
-      if (token !== this.generation) {
-        await session.leave({ silent: true })
-        return false
-      }
+      if (token !== this.generation) return false
       throw error
     }
     if (token !== this.generation) {
       await session.leave({ silent: true })
       return false
     }
-    return true
+    return session.isJoined()
   }
 
   async close(): Promise<void> {
@@ -96,7 +98,36 @@ export class RoomManager {
     if (this.session && this.spec) saveRoomLog(this.spec, this.session.getLines())
   }
 
+  private boundListeners(): SessionListener {
+    return {
+      onStatus: (status) => this.emit.onStatus?.(status),
+      onMembers: (members) => this.emit.onMembers?.(members),
+      onLine: (line) => {
+        this.emit.onLine?.(line)
+        this.scheduleSnapshot()
+      },
+      onReset: (lines) => this.emit.onReset?.(lines),
+    }
+  }
+
+  private scheduleSnapshot(): void {
+    if (this.saveTimer !== null || !this.spec) return
+    const runtime = this.options.runtime ?? browserRuntime
+    this.saveTimer = runtime.setTimeout(() => {
+      this.saveTimer = null
+      this.snapshot()
+    }, CACHE_DEBOUNCE_MS)
+  }
+
+  private clearSaveTimer(): void {
+    if (this.saveTimer === null) return
+    const runtime = this.options.runtime ?? browserRuntime
+    runtime.clearTimeout(this.saveTimer)
+    this.saveTimer = null
+  }
+
   private async snapshotAndClose(): Promise<void> {
+    this.clearSaveTimer()
     if (this.session && this.spec) {
       saveRoomLog(this.spec, this.session.getLines())
       await this.session.leave({ silent: true })

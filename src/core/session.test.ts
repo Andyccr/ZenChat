@@ -156,13 +156,41 @@ describe('ChatSession', () => {
     expect([...lines].reverse().find((line) => line.kind === 'chat' && line.self)).toMatchObject({ delivery: 'acked' })
   })
 
-  it('prunes a peer that stopped announcing', async () => {
+  it('prunes a ghost hello that is not in the transport peer set', async () => {
     const { session, clock, lines, transport } = harness()
     await session.join(spec)
-    transport().peerJoin('peer-gone')
     transport().payload('peer-gone', createHelloPayload('青石'))
     clock.advance(80_000)
     expect(lines.some((line) => line.kind === 'system' && line.text.includes('离开'))).toBe(true)
+  })
+
+  it('keeps a connected peer that went quiet', async () => {
+    const { session, clock, lines, transport } = harness()
+    await session.join(spec)
+    transport().peerJoin('peer-live')
+    transport().payload('peer-live', createHelloPayload('青石'))
+    clock.advance(80_000)
+    expect(lines.filter((line) => line.kind === 'system' && line.text.includes('离开'))).toHaveLength(0)
+  })
+
+  it('leaves the failed transport before a second join', async () => {
+    const clock = createMemoryRuntime()
+    const created: FakeTransport[] = []
+    let fail = true
+    const session = new ChatSession(identity, {}, {
+      runtime: clock.runtime,
+      createTransport: () => {
+        const fake = new FakeTransport()
+        if (fail) fake.failJoin = new Error('tracker down')
+        created.push(fake)
+        return fake
+      },
+    })
+    await expect(session.join(spec)).rejects.toThrow('tracker down')
+    expect(created.at(-1)?.handlers).toBeNull()
+    fail = false
+    await session.join(spec)
+    expect(session.isJoined()).toBe(true)
   })
 
   it('resends a failed line restored from cache', async () => {

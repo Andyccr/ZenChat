@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { decodeIncoming } from './payload-router'
+import { applyIncoming, decodeIncoming } from './payload-router'
 import { createAckPayload, createChatPayload, createHelloPayload, createTypingPayload } from './protocol'
 
 describe('decodeIncoming', () => {
@@ -20,5 +20,16 @@ describe('decodeIncoming', () => {
     const chat = createChatPayload('青石', '在吗', 'aabbccdd12345678', 1)
     expect(decodeIncoming(chat, () => false)).toMatchObject({ type: 'chat', duplicate: false, text: '在吗' })
     expect(decodeIncoming(chat, (id) => id === chat.id)).toMatchObject({ type: 'chat', duplicate: true })
+  })
+
+  it('dispatches decoded payloads to the matching handler', () => {
+    const seen: string[] = []
+    applyIncoming('peer-a', createHelloPayload('晚风'), () => false, {
+      hello: (peerId, nick, features) => seen.push(`${peerId}:${nick}:${features.join(',')}`),
+      typing: () => seen.push('typing'),
+      ack: () => seen.push('ack'),
+      chat: () => seen.push('chat'),
+    })
+    expect(seen).toEqual(['peer-a:晚风:ack'])
   })
 })

@@ -1,3 +1,4 @@
+import { MAX_MESSAGE_LENGTH, MAX_NICK_LENGTH } from '../config/app'
 import { colorFromId } from '../core/identity'
 import type { ChatLine, Member, SendResult, SessionStatus } from '../core/types'
 import { copy } from './copy'
@@ -48,7 +49,7 @@ export class ChatPane {
     const composer = el('textarea', {
       rows: 1,
       placeholder: copy.placeholder,
-      maxlength: 4000,
+      maxlength: MAX_MESSAGE_LENGTH,
       enterkeyhint: 'send',
       'aria-label': copy.placeholder,
     }) as HTMLTextAreaElement
@@ -69,6 +70,7 @@ export class ChatPane {
     picker.el.addEventListener('click', (event) => event.stopPropagation())
 
     const send = () => {
+      this.handlers.onNick(this.nickInput.value)
       const text = composer.value
       if (!text.trim()) return
       composer.value = ''
@@ -95,12 +97,13 @@ export class ChatPane {
 
     this.nickInput = el('input', {
       class: 'nick-edit',
-      maxlength: 24,
+      maxlength: MAX_NICK_LENGTH,
       value: handlers.nick,
       'aria-label': copy.nick,
     }) as HTMLInputElement
     const commitNick = () => this.handlers.onNick(this.nickInput.value)
     this.nickInput.addEventListener('change', commitNick)
+    this.nickInput.addEventListener('blur', commitNick)
     this.nickInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
         event.preventDefault()
@@ -179,7 +182,7 @@ export class ChatPane {
       this.membersEl.append(
         el('div', { class: 'member' }, [
           el('b', { style: `color:${colorFromId(member.id)}` }, [member.nick]),
-          el('span', { class: 'muted' }, [member.typing ? '输入中' : member.rttMs !== null ? `${Math.round(member.rttMs)}ms` : '']),
+          el('span', { class: 'muted' }, [member.typing ? copy.typing : member.rttMs !== null ? `${Math.round(member.rttMs)}ms` : '']),
         ]),
       )
     }
