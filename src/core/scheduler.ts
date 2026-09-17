@@ -1,9 +1,13 @@
-export function throttle<T extends unknown[]>(fn: (...args: T) => void, ms: number): (...args: T) => void {
+export function throttle<T extends unknown[]>(
+  fn: (...args: T) => void,
+  ms: number,
+  now: () => number = Date.now,
+): (...args: T) => void {
   let last = Number.NEGATIVE_INFINITY
   return (...args: T) => {
-    const now = Date.now()
-    if (now - last < ms) return
-    last = now
+    const at = now()
+    if (at - last < ms) return
+    last = at
     fn(...args)
   }
 }

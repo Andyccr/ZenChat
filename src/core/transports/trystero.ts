@@ -77,6 +77,7 @@ export class TrysteroTransport implements SignallingTransport {
 
   async leave(): Promise<void> {
     const room = this.room
+    this.module = null
     this.room = null
     this.action = null
     if (room) {

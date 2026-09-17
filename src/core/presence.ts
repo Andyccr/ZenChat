@@ -68,9 +68,10 @@ export class Presence {
     return [...this.members.values()].sort((a, b) => a.joinedAt - b.joinedAt)
   }
 
-  prune(maxAgeMs: number): Member[] {
+  prune(maxAgeMs: number, keep: Iterable<string> = []): Member[] {
+    const held = new Set(keep)
     const cutoff = this.runtime.now() - maxAgeMs
-    const gone = this.list().filter((member) => member.lastSeenAt < cutoff)
+    const gone = this.list().filter((member) => member.lastSeenAt < cutoff && !held.has(member.id))
     for (const member of gone) this.remove(member.id)
     return gone
   }

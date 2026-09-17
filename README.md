@@ -56,10 +56,11 @@ flowchart LR
 | RoomManager | Room lifecycle, durable log cache, skip reconnect if the same room is already joined. UI never reaches into `ChatSession`. |
 | ChatSession | Thin orchestrator: transport in, machine + heartbeat + router + outbound + presence + transcript out. |
 | SessionMachine | Pure join/wait/live/error transitions. Status copy is derived from the machine. |
-| Heartbeat | Hello interval, relay/RTT poll, visibility pause, stale presence prune. |
-| PayloadRouter | Decode v1 hello/typing/ack/chat; session only applies effects. |
-| Outbound | Delivery timers plus the original payload so a late ack or tap-to-resend can settle. Peers that advertise `ack` in hello get a receipt. |
-| Presence / Transcript | Members + typing TTL + last-seen prune; capped message log, dedupe ids, durable hydrate (drop pending, keep failed). |
+| Heartbeat | Hello interval, relay/RTT poll, visibility pause, stale presence prune (skips peers still in the transport set). |
+| PayloadRouter | Decode v1 hello/typing/ack/chat and dispatch to session effects. |
+| Outbound | Delivery timers that pause while the tab is hidden, plus the original payload so a late ack or tap-to-resend can settle. |
+| Presence / Transcript | Members + typing TTL + last-seen prune; capped message log, shared durable-line normalize (drop pending, keep failed). |
+| Room names | One canonical `RoomSpec` at the navigation boundary. Empty names are rejected; lobby/jump/hash/recent all store the same id. |
 | Transport factory | Default Trystero torrent/nostr. Tests inject a fake. A `Libp2pTransport` can plug in here. |
 | DataChannel | Encrypted chat after ICE succeeds. Trackers never see plaintext. |
 

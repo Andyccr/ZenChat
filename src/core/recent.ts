@@ -1,5 +1,5 @@
 import { MAX_RECENT_ROOMS } from '../config/app'
-import { normalizeRoomName, recentRoomKey } from './room'
+import { canonicalizeSpec, normalizeRoomName, recentRoomKey } from './room'
 import { recallSecret } from './secrets'
 import type { RoomSpec } from './types'
 
@@ -36,13 +36,14 @@ export function loadRecentRooms(): RecentRoom[] {
 }
 
 export function rememberRoom(spec: RoomSpec): RecentRoom[] {
+  const clean = canonicalizeSpec(spec) ?? spec
   const next: RecentRoom = {
-    name: spec.name,
-    strategy: spec.strategy,
-    hasPassword: Boolean(spec.password),
+    name: normalizeRoomName(clean.name) || clean.name,
+    strategy: clean.strategy,
+    hasPassword: Boolean(clean.password),
     visitedAt: Date.now(),
   }
-  const others = loadRecentRooms().filter((item) => recentRoomKey(item) !== recentRoomKey(spec))
+  const others = loadRecentRooms().filter((item) => recentRoomKey(item) !== recentRoomKey(clean))
   const list = [next, ...others].slice(0, MAX_RECENT_ROOMS)
   localStorage.setItem(KEY, JSON.stringify(list))
   return list
