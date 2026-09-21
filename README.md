@@ -4,7 +4,7 @@ Serverless browser P2P chat for GitHub Pages. No backend. Peers meet through pub
 
 部署在 GitHub Pages 上的无服务器 P2P 聊天室。没有后端。浏览器经公共 WebTorrent Tracker 或 Nostr 中继相遇，消息只走 WebRTC DataChannel。
 
-**Live / 在线：** https://andyccr.github.io/ZenChat/
+**Live / 在线：** http://andyccr.com/ZenChat/
 
 ---
 
