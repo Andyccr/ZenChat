@@ -29,7 +29,19 @@ export class Presence {
   }
 
   supports(feature: string): boolean {
-    return this.list().some((member) => member.features.includes(feature))
+    return this.idsWith(feature).length > 0
+  }
+
+  idsWith(feature: string): string[] {
+    const ids: string[] = []
+    for (const member of this.members.values()) {
+      if (member.features.includes(feature)) ids.push(member.id)
+    }
+    return ids
+  }
+
+  size(): number {
+    return this.members.size
   }
 
   remove(id: string): Member | undefined {

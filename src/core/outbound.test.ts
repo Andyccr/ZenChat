@@ -42,4 +42,28 @@ describe('Outbound', () => {
     expect(expired).toEqual(['msg-3'])
     outbound.dispose()
   })
+
+  it('waits for every remaining peer before settling, and drops leavers', () => {
+    const clock = createMemoryRuntime(0)
+    const expired: string[] = []
+    const outbound = new Outbound(clock.runtime, 100, (id) => expired.push(id))
+    outbound.expect('msg-q', { text: 'hi' }, ['peer-a', 'peer-b'])
+    expect(outbound.ack('msg-q', 'peer-a')).toBe(false)
+    expect(outbound.payload('msg-q')).toEqual({ text: 'hi' })
+    expect(outbound.dropPeer('peer-b')).toEqual(['msg-q'])
+    expect(outbound.payload('msg-q')).toBeUndefined()
+    expect(expired).toEqual([])
+    outbound.dispose()
+  })
+
+  it('does not mark delivered if every waiter leaves without acking', () => {
+    const clock = createMemoryRuntime(0)
+    const expired: string[] = []
+    const outbound = new Outbound(clock.runtime, 100, (id) => expired.push(id))
+    outbound.expect('msg-q2', { text: 'hi' }, ['peer-a'])
+    expect(outbound.dropPeer('peer-a')).toEqual([])
+    clock.advance(100)
+    expect(expired).toEqual(['msg-q2'])
+    outbound.dispose()
+  })
 })

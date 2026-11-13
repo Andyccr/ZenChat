@@ -1,8 +1,8 @@
-import { CACHE_DEBOUNCE_MS } from '../config/app'
+import { CACHE_DEBOUNCE_MS, RECONNECT_MIN_MS } from '../config/app'
 import { loadRoomLog, saveRoomLog } from './cache'
 import { rememberRoom } from './recent'
 import { canonicalizeSpec, sameRoom } from './room'
-import { browserRuntime } from './runtime'
+import { browserRuntime, type Runtime } from './runtime'
 import { ChatSession, type SessionListener, type SessionOptions } from './session'
 import type { Identity, RoomSpec, SendResult } from './types'
 
@@ -10,15 +10,19 @@ export class RoomManager {
   private identity: Identity
   private emit: SessionListener
   private options: SessionOptions
+  private runtime: Runtime
   private session: ChatSession | null = null
   private spec: RoomSpec | null = null
   private generation = 0
   private saveTimer: number | null = null
+  private lastReconnectAt = Number.NEGATIVE_INFINITY
 
   constructor(identity: Identity, listeners: SessionListener, options: SessionOptions = {}) {
     this.identity = identity
     this.emit = listeners
     this.options = options
+    this.runtime = options.runtime ?? browserRuntime
+    this.runtime.onOnline((up) => this.onConnectivity(up))
   }
 
   current(): RoomSpec | null {
@@ -98,6 +102,18 @@ export class RoomManager {
     if (this.session && this.spec) saveRoomLog(this.spec, this.session.getLines())
   }
 
+  private onConnectivity(up: boolean): void {
+    if (!this.spec) return
+    if (!up) {
+      this.session?.noteOffline()
+      return
+    }
+    const now = this.runtime.now()
+    if (now - this.lastReconnectAt < RECONNECT_MIN_MS) return
+    this.lastReconnectAt = now
+    void this.open(this.spec, true)
+  }
+
   private boundListeners(): SessionListener {
     return {
       onStatus: (status) => this.emit.onStatus?.(status),
@@ -112,8 +128,7 @@ export class RoomManager {
 
   private scheduleSnapshot(): void {
     if (this.saveTimer !== null || !this.spec) return
-    const runtime = this.options.runtime ?? browserRuntime
-    this.saveTimer = runtime.setTimeout(() => {
+    this.saveTimer = this.runtime.setTimeout(() => {
       this.saveTimer = null
       this.snapshot()
     }, CACHE_DEBOUNCE_MS)
@@ -121,8 +136,7 @@ export class RoomManager {
 
   private clearSaveTimer(): void {
     if (this.saveTimer === null) return
-    const runtime = this.options.runtime ?? browserRuntime
-    runtime.clearTimeout(this.saveTimer)
+    this.runtime.clearTimeout(this.saveTimer)
     this.saveTimer = null
   }
 

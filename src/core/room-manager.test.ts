@@ -115,4 +115,31 @@ describe('RoomManager', () => {
     clock.advance(CACHE_DEBOUNCE_MS)
     expect(loadRoomLog(spec).some((line) => line.kind === 'chat' && line.text === 'hi')).toBe(true)
   })
+
+  it('force-rejoins when connectivity returns', async () => {
+    const clock = createMemoryRuntime()
+    const created: FakeTransport[] = []
+    const statuses: { detail: string }[] = []
+    const rm = new RoomManager(
+      identity,
+      { onStatus: (status) => statuses.push(status) },
+      {
+        runtime: clock.runtime,
+        createTransport: (strategy) => {
+          const fake = new FakeTransport(strategy)
+          created.push(fake)
+          return fake
+        },
+      },
+    )
+    const spec = { name: 'lobby', password: '', strategy: 'torrent' as const }
+    await rm.open(spec)
+    const before = created.length
+    clock.setOnline(false)
+    expect(statuses.at(-1)?.detail).toBe('网络已断开，恢复后会自动重连')
+    clock.setOnline(true)
+    await expect.poll(() => created.length).toBeGreaterThan(before)
+    expect(rm.isJoined()).toBe(true)
+    expect(rm.current()?.name).toBe('lobby')
+  })
 })

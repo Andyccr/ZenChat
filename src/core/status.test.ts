@@ -43,7 +43,7 @@ describe('connection health', () => {
   })
 
   it('treats identical statuses as unchanged', () => {
-    const status = { phase: 'connected' as const, detail: '已直连 1 人', relays: [{ url: 'wss://t', readyState: 1 }], peerCount: 1 }
+    const status = { phase: 'connected' as const, detail: '已直连 1 人', relays: [{ url: 'wss://t', readyState: 1 }], peerCount: 1, canSend: true }
     expect(sameStatus(status, { ...status, relays: [{ url: 'wss://t', readyState: 1 }] })).toBe(true)
     expect(sameStatus(status, { ...status, peerCount: 2 })).toBe(false)
   })

@@ -40,4 +40,21 @@ describe('Transcript', () => {
     expect(failed).toMatchObject({ kind: 'chat', id: 'eeff0011', delivery: 'failed' })
     expect(log.get('eeff0011')).toMatchObject({ text: 'retry' })
   })
+
+  it('merges sync history by id and exports durable chats newest-last', () => {
+    const log = new Transcript()
+    log.append(chat('c2', '后'))
+    expect(
+      log.mergeSync(
+        [
+          { id: 'c1', fromId: 'a', nick: '晚风', text: '先', ts: 0 },
+          { id: 'c2', fromId: 'a', nick: '晚风', text: '后', ts: 1 },
+        ],
+        'local',
+      ),
+    ).toBe(true)
+    expect(log.snapshot().map((line) => line.id)).toEqual(['c1', 'c2'])
+    expect(log.exportSync().map((line) => line.id)).toEqual(['c1', 'c2'])
+    expect(log.mergeSync([{ id: 'c1', fromId: 'a', nick: '晚风', text: '先', ts: 0 }], 'local')).toBe(false)
+  })
 })

@@ -54,6 +54,7 @@ export type SessionStatus = {
   detail: string
   relays: RelayStatus[]
   peerCount: number
+  canSend: boolean
 }
 
 export type SendResult = 'sent' | 'empty' | 'closed' | 'failed'

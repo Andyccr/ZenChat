@@ -52,14 +52,14 @@ flowchart LR
 
 | Layer / 层 | Role / 职责 |
 |---|---|
-| UI Shell | Lobby, tabs, theme. Chat pane is a separate view; shell does not remount on switch. Failed self lines are tappable to resend. |
-| RoomManager | Room lifecycle, durable log cache, skip reconnect if the same room is already joined. UI never reaches into `ChatSession`. |
-| ChatSession | Thin orchestrator: transport in, machine + heartbeat + router + outbound + presence + transcript out. |
+| UI Shell | Lobby, tabs, theme. Chat pane is a separate view; shell does not remount on switch. Failed self lines are tappable to resend. Hidden-tab unread shows on the document title. URLs in chat become links. |
+| RoomManager | Room lifecycle, durable log cache, skip reconnect if the same room is already joined. Rejoins when the browser comes back online. UI never reaches into `ChatSession`. |
+| ChatSession | Thin orchestrator: transport in, machine + heartbeat + router + outbound + presence + transcript out. Send is gated until the overlay handshake finishes; composer follows `canSend`. |
 | SessionMachine | Pure join/wait/live/error transitions. Status copy is derived from the machine. |
 | Heartbeat | Hello interval, relay/RTT poll, visibility pause, stale presence prune (skips peers still in the transport set). |
-| PayloadRouter | Decode v1 hello/typing/ack/chat and dispatch to session effects. |
-| Outbound | Delivery timers that pause while the tab is hidden, plus the original payload so a late ack or tap-to-resend can settle. |
-| Presence / Transcript | Members + typing TTL + last-seen prune; capped message log, shared durable-line normalize (drop pending, keep failed). |
+| PayloadRouter | Decode v1 hello/typing/ack/chat/sync and dispatch to session effects. Per-peer flood gate drops spam. |
+| Outbound | Delivery timers that pause while the tab is hidden. Acks wait for every ack-capable peer present at send time; a leaver who already acked still counts. |
+| Presence / Transcript | Members + typing TTL + last-seen prune; capped message log, shared durable-line normalize (drop pending, keep failed). New peers get a `sync` of recent durable chats. Fast reconnects are named 重新连上了. |
 | Room names | One canonical `RoomSpec` at the navigation boundary. Empty names are rejected; lobby/jump/hash/recent all store the same id. |
 | Transport factory | Default Trystero torrent/nostr. Tests inject a fake. A `Libp2pTransport` can plug in here. |
 | DataChannel | Encrypted chat after ICE succeeds. Trackers never see plaintext. |
@@ -88,7 +88,7 @@ npm run dev
 
 Open two windows, join the same room. Top tabs or `Ctrl/Cmd+K` switch rooms. 「顔」 inserts kaomoji/emoji. Theme cycles Auto / Light / Dark. Room passwords stay in the tab (sessionStorage) and are not written into the URL unless you choose 「含口令」.
 
-On a phone, nickname + room + **Join** sit above the fold. Chat uses a fixed viewport: the composer stays on screen (including when the keyboard opens via `visualViewport`). Members are a sheet, not a second column you have to scroll past.
+On a phone, nickname + room + **Join** sit above the fold. Chat uses a fixed viewport: the composer stays on screen (including when the keyboard opens via `visualViewport`). Members are a sheet, not a second column you have to scroll past. Background tabs show `(n)` on the title when someone else writes. Sleeping the laptop and waking it rejoins the current room.
 
 ### Deploy
 
@@ -134,7 +134,7 @@ npm run dev
 
 两个窗口进同一房间即可互发。顶栏标签或 `Ctrl/Cmd+K` 切房间。「顔」插入颜文字/表情。主题：自动 / 浅色 / 深色。口令只留在当前标签页，默认不写进网址；需要时再点「含口令」。
 
-手机上：昵称、房间、**加入**都在首屏，不用下滑。聊天是固定视口，输入框钉在底部（键盘弹出时用 `visualViewport` 收缩高度）。成员列表是浮层，不会把输入框顶出屏幕。
+手机上：昵称、房间、**加入**都在首屏，不用下滑。聊天是固定视口，输入框钉在底部（键盘弹出时用 `visualViewport` 收缩高度）。成员列表是浮层，不会把输入框顶出屏幕。后台标签页有人发言会在标题上显示 `(n)`。电脑休眠再醒来会自动重进当前房间。
 
 ### 部署
 

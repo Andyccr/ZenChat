@@ -9,10 +9,10 @@ export function buildLobby(options: {
   nick: string
   onJoin: (input: { nick: string; spec: RoomSpec }) => void
 }): HTMLElement {
-  const nick = el('input', { maxlength: MAX_NICK_LENGTH, value: options.nick, autocomplete: 'nickname' }) as HTMLInputElement
-  const room = el('input', { maxlength: MAX_ROOM_LENGTH, value: DEFAULT_ROOM, autocomplete: 'off' }) as HTMLInputElement
-  const password = el('input', { type: 'password', autocomplete: 'off' }) as HTMLInputElement
-  const strategy = el('select', {}, [
+  const nick = el('input', { id: 'lobby-nick', name: 'nick', maxlength: MAX_NICK_LENGTH, value: options.nick, autocomplete: 'nickname' }) as HTMLInputElement
+  const room = el('input', { id: 'lobby-room', name: 'room', maxlength: MAX_ROOM_LENGTH, value: DEFAULT_ROOM }) as HTMLInputElement
+  const password = el('input', { id: 'lobby-password', name: 'password', type: 'password', autocomplete: 'new-password' }) as HTMLInputElement
+  const strategy = el('select', { id: 'lobby-strategy', name: 'strategy' }, [
     el('option', { value: 'torrent' }, [copy.torrent]),
     el('option', { value: 'nostr' }, [copy.nostr]),
   ]) as HTMLSelectElement

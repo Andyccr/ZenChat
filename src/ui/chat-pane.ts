@@ -29,6 +29,8 @@ export class ChatPane {
   private vacantEl: HTMLElement
   private peopleBtn: HTMLButtonElement
   private nickInput: HTMLInputElement
+  private composer: HTMLTextAreaElement
+  private sendBtn: HTMLButtonElement
   private lastStatus = ''
   private lastPeerCount = 0
 
@@ -46,18 +48,23 @@ export class ChatPane {
       this.root.classList.toggle('show-side')
       this.peopleBtn.setAttribute('aria-expanded', this.root.classList.contains('show-side') ? 'true' : 'false')
     })
-    const composer = el('textarea', {
+    this.composer = el('textarea', {
       rows: 1,
+      id: 'composer',
+      name: 'message',
       placeholder: copy.placeholder,
       maxlength: MAX_MESSAGE_LENGTH,
       enterkeyhint: 'send',
       'aria-label': copy.placeholder,
     }) as HTMLTextAreaElement
-    composer.setAttribute('enterkeyhint', 'send')
-    composer.setAttribute('autocapitalize', 'sentences')
-    const picker = new StampPicker(composer)
+    this.composer.setAttribute('enterkeyhint', 'send')
+    this.composer.setAttribute('autocapitalize', 'sentences')
+    this.composer.disabled = true
+    this.composer.placeholder = copy.connecting
+    const picker = new StampPicker(this.composer)
     const stampBtn = el('button', { class: 'btn ghost', type: 'button', title: copy.stamps }, ['顔'])
-    const sendBtn = el('button', { class: 'btn primary send', type: 'button', 'aria-label': copy.send }, ['↑'])
+    this.sendBtn = el('button', { class: 'btn primary send', type: 'button', 'aria-label': copy.send }, ['↑']) as HTMLButtonElement
+    this.sendBtn.disabled = true
     stampBtn.addEventListener('click', (event) => {
       event.stopPropagation()
       picker.toggle()
@@ -70,36 +77,40 @@ export class ChatPane {
     picker.el.addEventListener('click', (event) => event.stopPropagation())
 
     const send = () => {
+      if (this.composer.disabled) return
       this.handlers.onNick(this.nickInput.value)
-      const text = composer.value
+      const text = this.composer.value
       if (!text.trim()) return
-      composer.value = ''
-      composer.style.height = 'auto'
+      this.composer.value = ''
+      this.composer.style.height = 'auto'
       picker.hide()
       void this.handlers.send(text).then((result) => {
         if (result === 'failed' || result === 'closed') {
-          composer.value = text
+          this.composer.value = text
         }
       })
     }
-    sendBtn.addEventListener('click', send)
-    composer.addEventListener('keydown', (event) => {
+    this.sendBtn.addEventListener('click', send)
+    this.composer.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault()
         send()
       }
     })
-    composer.addEventListener('input', () => {
-      composer.style.height = 'auto'
-      composer.style.height = `${Math.min(composer.scrollHeight, 96)}px`
+    this.composer.addEventListener('input', () => {
+      this.composer.style.height = 'auto'
+      this.composer.style.height = `${Math.min(this.composer.scrollHeight, 96)}px`
       this.handlers.typing()
     })
 
     this.nickInput = el('input', {
       class: 'nick-edit',
+      id: 'chat-nick',
+      name: 'nick',
       maxlength: MAX_NICK_LENGTH,
       value: handlers.nick,
       'aria-label': copy.nick,
+      autocomplete: 'nickname',
     }) as HTMLInputElement
     const commitNick = () => this.handlers.onNick(this.nickInput.value)
     this.nickInput.addEventListener('change', commitNick)
@@ -123,7 +134,7 @@ export class ChatPane {
         this.vacantEl,
         this.log.el,
         picker.el,
-        el('div', { class: 'composer' }, [stampBtn, composer, sendBtn]),
+        el('div', { class: 'composer' }, [stampBtn, this.composer, this.sendBtn]),
       ]),
       el('aside', { class: 'side' }, [
         el('h2', {}, [copy.members]),
@@ -158,10 +169,13 @@ export class ChatPane {
 
   status(status: SessionStatus): void {
     const open = status.relays.filter((relay) => relay.readyState === WebSocket.OPEN).length
-    const key = `${status.phase}|${status.detail}|${status.peerCount}|${open}|${this.log.size}`
+    const key = `${status.phase}|${status.detail}|${status.peerCount}|${open}|${status.canSend}|${this.log.size}`
     if (key === this.lastStatus) return
     this.lastStatus = key
     this.lastPeerCount = status.peerCount
+    this.composer.disabled = !status.canSend
+    this.sendBtn.disabled = !status.canSend
+    this.composer.placeholder = status.canSend ? copy.placeholder : copy.connecting
     const tone = status.phase === 'connected' ? ' ok' : status.phase === 'error' ? ' err' : ''
     this.statusEl.replaceChildren(
       el('i', { class: `dot${tone}` }),
