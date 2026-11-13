@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createAckPayload, createChatPayload, createHelloPayload, parsePayload } from './protocol'
+import { createAckPayload, createChatPayload, createHelloPayload, createSyncPayload, parsePayload } from './protocol'
 
 describe('parsePayload', () => {
   it('accepts a well-formed chat message', () => {
@@ -36,7 +36,7 @@ describe('parsePayload', () => {
       v: 1,
       type: 'hello',
       nick: '晚风',
-      features: ['ack'],
+      features: ['ack', 'sync'],
     })
     expect(parsePayload({ v: 1, type: 'hello', nick: '晚风' })).toMatchObject({ features: [] })
     expect(parsePayload(createAckPayload('晚风', 'aabbccdd12345678'))).toEqual({
@@ -46,5 +46,20 @@ describe('parsePayload', () => {
       nick: '晚风',
     })
     expect(parsePayload({ v: 1, type: 'leave', nick: '晚风' })).toBeNull()
+  })
+
+  it('parses a sync payload and drops malformed lines', () => {
+    const payload = createSyncPayload('晚风', [
+      { id: 'aabbccdd12345678', fromId: 'peer-a', nick: '青石', text: '在吗', ts: 2 },
+    ])
+    expect(parsePayload(payload)).toEqual(payload)
+    expect(
+      parsePayload({
+        v: 1,
+        type: 'sync',
+        nick: '晚风',
+        lines: [{ id: 'bad', fromId: 'x', nick: '青石', text: 'x', ts: 1 }, payload.lines[0]],
+      }),
+    ).toMatchObject({ type: 'sync', lines: [payload.lines[0]] })
   })
 })

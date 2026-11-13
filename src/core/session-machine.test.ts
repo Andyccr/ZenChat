@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { idleLife, isJoined, reduceLife, uiPhase } from './session-machine'
+import { canSend, idleLife, isJoined, reduceLife, uiPhase } from './session-machine'
 
 describe('session machine', () => {
   it('joins to waiting, then live, then waiting when the last peer leaves', () => {
     let life = reduceLife(idleLife(), { type: 'join' })
     expect(life.state).toBe('joining')
     expect(uiPhase(life)).toBe('connecting')
+    expect(canSend(life)).toBe(false)
     life = reduceLife(life, { type: 'join_ok' })
     expect(life.state).toBe('waiting')
+    expect(canSend(life)).toBe(true)
     life = reduceLife(life, { type: 'peers', count: 1 })
     expect(life.state).toBe('live')
     expect(uiPhase(life)).toBe('connected')

@@ -1,5 +1,5 @@
 import type { Life } from './session-machine'
-import { uiPhase } from './session-machine'
+import { canSend, uiPhase } from './session-machine'
 import type { RelayStatus, SessionStatus, SignalStrategy } from './types'
 
 export const STATUS_COPY = {
@@ -12,6 +12,8 @@ export const STATUS_COPY = {
   relaysDownTorrent: 'Tracker 连不上，可改用 Nostr',
   relaysDownNostr: 'Nostr 中继连不上，可改用 Tracker',
   sendFailed: '刚才那条没发出去，请再试一次',
+  offline: '网络已断开，恢复后会自动重连',
+  rejoined: '重新连上了',
 }
 
 export function connectingDetail(strategy: SignalStrategy): string {
@@ -57,6 +59,7 @@ export function deriveStatus(input: {
       detail: connectedDetail(input.peerCount),
       relays: input.relays,
       peerCount: input.peerCount,
+      canSend: canSend(input.life),
     }
   }
   const probes =
@@ -69,6 +72,7 @@ export function deriveStatus(input: {
     detail: input.life.state === 'joining' ? connectingDetail(input.strategy) : wait.detail,
     relays: input.relays,
     peerCount: input.peerCount,
+    canSend: canSend(input.life),
   }
 }
 
@@ -77,6 +81,7 @@ export function sameStatus(prev: SessionStatus, next: SessionStatus): boolean {
     prev.phase === next.phase &&
     prev.detail === next.detail &&
     prev.peerCount === next.peerCount &&
+    prev.canSend === next.canSend &&
     prev.relays.length === next.relays.length &&
     prev.relays.every((relay, i) => relay.readyState === next.relays[i]?.readyState)
   )

@@ -2,6 +2,8 @@ import { colorFromId } from '../core/identity'
 import type { ChatLine } from '../core/types'
 import { copy } from './copy'
 import { el, formatTime } from './dom'
+import { splitLinks } from './linkify'
+import { isNearBottom } from './scroll'
 import { isStamp } from './stickers'
 
 export class LogView {
@@ -22,10 +24,14 @@ export class LogView {
     this.ids.clear()
     this.nodes.clear()
     for (const line of lines) this.append(line, false)
-    this.stick()
+    this.scrollToEnd()
   }
 
   append(line: ChatLine, stick = true): void {
+    const follow =
+      stick &&
+      ((line.kind === 'chat' && line.self) ||
+        isNearBottom(this.el.scrollTop, this.el.scrollHeight, this.el.clientHeight))
     if (this.ids.has(line.id)) {
       this.replace(line)
       return
@@ -34,7 +40,7 @@ export class LogView {
     const node = this.render(line)
     this.nodes.set(line.id, node)
     this.el.append(node)
-    if (stick) this.stick()
+    if (follow) this.scrollToEnd()
   }
 
   private replace(line: ChatLine): void {
@@ -49,11 +55,10 @@ export class LogView {
     return renderLine(line, this.onResend)
   }
 
-  private stick(): void {
+  private scrollToEnd(): void {
     const node = this.el
     requestAnimationFrame(() => {
-      const nearBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 96
-      if (nearBottom) node.scrollTop = node.scrollHeight
+      node.scrollTop = node.scrollHeight
     })
   }
 }
@@ -69,10 +74,26 @@ function renderLine(line: ChatLine, onResend?: (id: string) => void): HTMLElemen
     el('time', {}, [formatTime(line.ts)]),
     ...(mark ? [mark] : []),
   ])
-  return el('article', { class: `bubble${line.self ? ' self' : ''}${stamp ? ' stamp' : ''}${line.delivery === 'failed' ? ' failed' : ''}`, 'data-id': line.id }, [
+  const node = el('article', { class: `bubble${line.self ? ' self' : ''}${stamp ? ' stamp' : ''}${line.delivery === 'failed' ? ' failed' : ''}`, 'data-id': line.id }, [
     header,
-    el('p', {}, [line.text]),
+    el('p', {}, stamp ? [line.text] : nodesFromText(line.text)),
   ])
+  if (line.self && line.delivery === 'failed' && onResend) {
+    node.addEventListener('click', (event) => {
+      if ((event.target as HTMLElement).closest('a, button')) return
+      onResend(line.id)
+    })
+  }
+  return node
+}
+
+function nodesFromText(text: string): Array<Node | string> {
+  return splitLinks(text).map((part) => {
+    if (part.type === 'text') return part.value
+    const link = el('a', { href: part.href, target: '_blank', rel: 'noreferrer noopener' }, [part.value])
+    link.addEventListener('click', (event) => event.stopPropagation())
+    return link
+  })
 }
 
 function deliveryMark(line: Extract<ChatLine, { kind: 'chat' }>, onResend?: (id: string) => void): HTMLElement | null {

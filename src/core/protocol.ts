@@ -1,7 +1,9 @@
-import { MAX_MESSAGE_LENGTH, PROTOCOL_VERSION } from '../config/app'
+import { MAX_MESSAGE_LENGTH, MAX_SYNC_LINES, PROTOCOL_VERSION } from '../config/app'
 import { sanitizeNick } from './identity'
 
 export const FEATURE_ACK = 'ack'
+export const FEATURE_SYNC = 'sync'
+export const KNOWN_FEATURES = [FEATURE_ACK, FEATURE_SYNC] as const
 
 export type HelloPayload = {
   v: typeof PROTOCOL_VERSION
@@ -32,7 +34,22 @@ export type AckPayload = {
   nick: string
 }
 
-export type WirePayload = HelloPayload | ChatPayload | TypingPayload | AckPayload
+export type SyncLine = {
+  id: string
+  fromId: string
+  nick: string
+  text: string
+  ts: number
+}
+
+export type SyncPayload = {
+  v: typeof PROTOCOL_VERSION
+  type: 'sync'
+  nick: string
+  lines: SyncLine[]
+}
+
+export type WirePayload = HelloPayload | ChatPayload | TypingPayload | AckPayload | SyncPayload
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -44,7 +61,7 @@ function isVersion(value: unknown): value is typeof PROTOCOL_VERSION {
 
 function readFeatures(value: unknown): string[] {
   if (!Array.isArray(value)) return []
-  return [...new Set(value.filter((item): item is string => item === FEATURE_ACK))]
+  return [...new Set(value.filter((item): item is string => (KNOWN_FEATURES as readonly string[]).includes(item)))]
 }
 
 function readId(value: unknown): string | null {
@@ -64,7 +81,16 @@ export function createChatPayload(nick: string, text: string, id: string, ts: nu
 }
 
 export function createHelloPayload(nick: string): HelloPayload {
-  return { v: PROTOCOL_VERSION, type: 'hello', nick: sanitizeNick(nick), features: [FEATURE_ACK] }
+  return { v: PROTOCOL_VERSION, type: 'hello', nick: sanitizeNick(nick), features: [...KNOWN_FEATURES] }
+}
+
+export function createSyncPayload(nick: string, lines: SyncLine[]): SyncPayload {
+  return {
+    v: PROTOCOL_VERSION,
+    type: 'sync',
+    nick: sanitizeNick(nick),
+    lines: lines.slice(0, MAX_SYNC_LINES),
+  }
 }
 
 export function createTypingPayload(nick: string): TypingPayload {
@@ -111,5 +137,30 @@ export function parsePayload(value: unknown): WirePayload | null {
     return { v: PROTOCOL_VERSION, type: 'chat', id, ts: value.ts, nick, text }
   }
 
+  if (value.type === 'sync') {
+    if (!Array.isArray(value.lines)) return null
+    const lines: SyncLine[] = []
+    for (const row of value.lines) {
+      const parsed = parseSyncLine(row)
+      if (parsed) lines.push(parsed)
+      if (lines.length >= MAX_SYNC_LINES) break
+    }
+    return { v: PROTOCOL_VERSION, type: 'sync', nick, lines }
+  }
+
   return null
+}
+
+function parseSyncLine(value: unknown): SyncLine | null {
+  if (!isRecord(value)) return null
+  const id = readId(value.id)
+  if (!id) return null
+  if (typeof value.fromId !== 'string' || value.fromId.length < 1 || value.fromId.length > 80) return null
+  const nick = typeof value.nick === 'string' ? sanitizeNick(value.nick) : ''
+  if (!nick) return null
+  if (typeof value.ts !== 'number' || !Number.isFinite(value.ts)) return null
+  if (typeof value.text !== 'string') return null
+  const text = value.text.trim().slice(0, MAX_MESSAGE_LENGTH)
+  if (!text) return null
+  return { id, fromId: value.fromId, nick, text, ts: value.ts }
 }

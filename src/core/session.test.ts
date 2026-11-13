@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createAckPayload, createHelloPayload, createTypingPayload } from './protocol'
+import { FLOOD_CHAT_MAX } from '../config/app'
+import { createAckPayload, createHelloPayload, createSyncPayload, createTypingPayload } from './protocol'
 import { createMemoryRuntime } from './runtime'
 import { ChatSession } from './session'
 import { chatLine } from './transcript'
@@ -211,5 +212,93 @@ describe('ChatSession', () => {
     expect(await session.resend('aabbccdd12345678')).toBe('sent')
     expect(transport().sent.some((item) => (item.payload as { id?: string }).id === 'aabbccdd12345678')).toBe(true)
     expect(lines.some((line) => line.kind === 'chat' && line.id === 'aabbccdd12345678' && line.delivery === 'pending')).toBe(true)
+  })
+
+  it('rejects chat while the overlay handshake is still joining', async () => {
+    const clock = createMemoryRuntime()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const session = new ChatSession(identity, {}, {
+      runtime: clock.runtime,
+      createTransport: () => {
+        const fake = new FakeTransport()
+        fake.joinGate = gate
+        return fake
+      },
+    })
+    const joining = session.join(spec)
+    await Promise.resolve()
+    expect(session.canSend()).toBe(false)
+    expect(await session.sendChat('早')).toBe('closed')
+    release()
+    await joining
+    expect(session.canSend()).toBe(true)
+  })
+
+  it('waits for every ack-capable peer before marking delivered', async () => {
+    const { session, lines, transport } = harness()
+    await session.join(spec)
+    transport().payload('peer-a', createHelloPayload('甲'))
+    transport().payload('peer-b', createHelloPayload('乙'))
+    await session.sendChat('两位')
+    const pending = [...lines].reverse().find((line) => line.kind === 'chat' && line.self)
+    expect(pending).toMatchObject({ delivery: 'pending' })
+    const id = pending && pending.kind === 'chat' ? pending.id : ''
+    transport().payload('peer-a', createAckPayload('甲', id))
+    expect([...lines].reverse().find((line) => line.kind === 'chat' && line.self)).toMatchObject({ delivery: 'pending' })
+    transport().payload('peer-b', createAckPayload('乙', id))
+    expect([...lines].reverse().find((line) => line.kind === 'chat' && line.self)).toMatchObject({ delivery: 'acked' })
+  })
+
+  it('drops a flooding peer once the chat window is full', async () => {
+    const { session, transport } = harness()
+    await session.join(spec)
+    for (let i = 0; i < FLOOD_CHAT_MAX + 3; i += 1) {
+      transport().payload('flood', {
+        v: 1,
+        type: 'chat',
+        id: `floodid${i.toString().padStart(8, '0')}`,
+        ts: i,
+        nick: '刷屏',
+        text: `m${i}`,
+      })
+    }
+    expect(session.getLines().filter((line) => line.kind === 'chat')).toHaveLength(FLOOD_CHAT_MAX)
+  })
+
+  it('offers recent chat to a joining peer and merges incoming sync', async () => {
+    const { session, transport } = harness()
+    await session.join(spec)
+    await session.sendChat('先到')
+    transport().peerJoin('peer-z')
+    expect(
+      transport().sent.some(
+        (item) => (item.payload as { type?: string }).type === 'sync' && item.target === 'peer-z',
+      ),
+    ).toBe(true)
+    transport().payload(
+      'peer-z',
+      createSyncPayload('青石', [{ id: 'aabbccdd12345678', fromId: 'peer-z', nick: '青石', text: '历史', ts: 1 }]),
+    )
+    expect(session.getLines().some((line) => line.kind === 'chat' && line.text === '历史')).toBe(true)
+  })
+
+  it('names a fast rejoin instead of a fresh join', async () => {
+    const { session, lines, transport } = harness()
+    await session.join(spec)
+    transport().peerJoin('peer-aa')
+    transport().peerLeave('peer-aa')
+    transport().peerJoin('peer-aa')
+    expect(lines.some((line) => line.kind === 'system' && line.text.includes('重新连上了'))).toBe(true)
+  })
+
+  it('surfaces an offline status without leaving the room spec', async () => {
+    const { session, statuses } = harness()
+    await session.join(spec)
+    session.noteOffline()
+    expect(session.isJoined()).toBe(true)
+    expect(statuses.at(-1)).toMatchObject({ phase: 'error', detail: '网络已断开，恢复后会自动重连', canSend: false })
   })
 })

@@ -501,6 +501,25 @@ textarea:focus-visible {
   word-break: break-word;
 }
 
+.bubble a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  pointer-events: auto;
+  position: relative;
+  z-index: 1;
+}
+
+.bubble.failed {
+  cursor: pointer;
+}
+
+.composer textarea:disabled,
+.btn.send:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .bubble.stamp p {
   font-size: 22px;
   line-height: 1.3;

@@ -23,8 +23,13 @@ describe('Presence', () => {
     expect(ended).toEqual(['p1'])
 
     expect(presence.setRtt('p1', 18)).toBe(true)
+    expect(presence.size()).toBe(1)
+    expect(presence.idsWith('ack')).toEqual([])
+    presence.upsert('p1', '晚风', ['ack'])
+    expect(presence.idsWith('ack')).toEqual(['p1'])
     expect(presence.remove('p1')?.nick).toBe('晚风')
     expect(presence.list()).toEqual([])
+    expect(presence.size()).toBe(0)
   })
 
   it('prunes members whose lastSeenAt is older than the stale window', () => {

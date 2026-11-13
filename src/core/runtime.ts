@@ -1,16 +1,19 @@
 export type Runtime = {
   now(): number
   hidden(): boolean
+  online(): boolean
   setTimeout(handler: () => void, ms: number): number
   clearTimeout(id: number): void
   setInterval(handler: () => void, ms: number): number
   clearInterval(id: number): void
   onVisibilityChange(handler: () => void): () => void
+  onOnline(handler: (up: boolean) => void): () => void
 }
 
 export const browserRuntime: Runtime = {
   now: () => Date.now(),
   hidden: () => document.hidden,
+  online: () => navigator.onLine,
   setTimeout: (handler, ms) => window.setTimeout(handler, ms),
   clearTimeout: (id) => window.clearTimeout(id),
   setInterval: (handler, ms) => window.setInterval(handler, ms),
@@ -18,6 +21,16 @@ export const browserRuntime: Runtime = {
   onVisibilityChange(handler) {
     document.addEventListener('visibilitychange', handler)
     return () => document.removeEventListener('visibilitychange', handler)
+  },
+  onOnline(handler) {
+    const on = () => handler(true)
+    const off = () => handler(false)
+    window.addEventListener('online', on)
+    window.addEventListener('offline', off)
+    return () => {
+      window.removeEventListener('online', on)
+      window.removeEventListener('offline', off)
+    }
   },
 }
 
@@ -32,16 +45,20 @@ export function createMemoryRuntime(start = 0): {
   runtime: Runtime
   advance(ms: number): void
   setHidden(hidden: boolean): void
+  setOnline(online: boolean): void
 } {
   let now = start
   let seq = 1
   let hidden = false
+  let online = true
   const timers = new Map<number, Timer>()
   const visibility = new Set<() => void>()
+  const connectivity = new Set<(up: boolean) => void>()
 
   const runtime: Runtime = {
     now: () => now,
     hidden: () => hidden,
+    online: () => online,
     setTimeout(handler, ms) {
       const id = seq++
       timers.set(id, { id, at: now + ms, fn: handler })
@@ -62,6 +79,12 @@ export function createMemoryRuntime(start = 0): {
       visibility.add(handler)
       return () => {
         visibility.delete(handler)
+      }
+    },
+    onOnline(handler) {
+      connectivity.add(handler)
+      return () => {
+        connectivity.delete(handler)
       }
     },
   }
@@ -93,6 +116,11 @@ export function createMemoryRuntime(start = 0): {
     setHidden(value: boolean) {
       hidden = value
       for (const handler of visibility) handler()
+    },
+    setOnline(value: boolean) {
+      if (online === value) return
+      online = value
+      for (const handler of connectivity) handler(value)
     },
   }
 }

@@ -26,6 +26,10 @@ export function isJoined(life: Life): boolean {
   return life.state === 'joining' || life.state === 'waiting' || life.state === 'live' || life.state === 'relay_down'
 }
 
+export function canSend(life: Life): boolean {
+  return life.state === 'waiting' || life.state === 'live' || life.state === 'relay_down'
+}
+
 function settle(life: Life): Life {
   if (life.state === 'idle' || life.state === 'failed' || life.state === 'joining' || life.state === 'leaving') {
     return life

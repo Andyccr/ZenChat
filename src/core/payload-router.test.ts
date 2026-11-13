@@ -8,7 +8,7 @@ describe('decodeIncoming', () => {
     expect(decodeIncoming(createHelloPayload('晚风'), () => false)).toEqual({
       type: 'hello',
       nick: '晚风',
-      features: ['ack'],
+      features: ['ack', 'sync'],
     })
     expect(decodeIncoming(createTypingPayload('听雨'), () => false)).toEqual({ type: 'typing', nick: '听雨' })
     expect(decodeIncoming(createAckPayload('青石', 'aabbccdd12345678'), () => false)).toEqual({
@@ -29,7 +29,8 @@ describe('decodeIncoming', () => {
       typing: () => seen.push('typing'),
       ack: () => seen.push('ack'),
       chat: () => seen.push('chat'),
+      sync: () => seen.push('sync'),
     })
-    expect(seen).toEqual(['peer-a:晚风:ack'])
+    expect(seen).toEqual(['peer-a:晚风:ack,sync'])
   })
 })

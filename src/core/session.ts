@@ -1,13 +1,15 @@
-import { ACK_TIMEOUT_MS, APP_ID, HELLO_INTERVAL_MS, PRESENCE_STALE_MS, RELAY_POLL_MS, TYPING_THROTTLE_MS } from '../config/app'
+import { ACK_TIMEOUT_MS, APP_ID, HELLO_INTERVAL_MS, PRESENCE_STALE_MS, RELAY_POLL_MS, REJOIN_GRACE_MS, TYPING_THROTTLE_MS } from '../config/app'
+import { FloodGate } from './flood'
 import { Heartbeat } from './heartbeat'
 import { randomHex } from './identity'
 import { Outbound } from './outbound'
-import { applyIncoming } from './payload-router'
+import { applyIncoming, floodLimit } from './payload-router'
 import { Presence } from './presence'
 import {
   createAckPayload,
   createChatPayload,
   createHelloPayload,
+  createSyncPayload,
   createTypingPayload,
   FEATURE_ACK,
   type ChatPayload,
@@ -15,7 +17,7 @@ import {
 import { normalizeRoomName, roomNamespace } from './room'
 import { browserRuntime, type Runtime } from './runtime'
 import { rafBatch, throttle } from './scheduler'
-import { idleLife, isJoined, reduceLife, type Life } from './session-machine'
+import { canSend, idleLife, isJoined, reduceLife, type Life } from './session-machine'
 import { connectingDetail, deriveStatus, relaysAreDown, sameStatus, startFailedDetail, STATUS_COPY } from './status'
 import { chatLine, systemLine, Transcript } from './transcript'
 import { createTransport, type TransportFactory } from './transports/create'
@@ -44,16 +46,20 @@ export class ChatSession {
   private presence: Presence
   private outbound: Outbound<ChatPayload>
   private heartbeat: Heartbeat
+  private flood = new FloodGate()
+  private lastLeft = new Map<string, number>()
   private life: Life = idleLife()
   private strategy: SignalStrategy = 'torrent'
   private joinErrors = 0
   private epoch = 0
+  private offline = false
   private sendTypingThrottled: () => void
   private status: SessionStatus = {
     phase: 'idle',
     detail: STATUS_COPY.idle,
     relays: [],
     peerCount: 0,
+    canSend: false,
   }
 
   private readonly emitMembers = rafBatch(() => {
@@ -73,7 +79,7 @@ export class ChatSession {
       onPoll: () => this.poll(),
     })
     this.sendTypingThrottled = throttle(() => {
-      if (!this.isJoined()) return
+      if (!this.canSend()) return
       void this.transport.send(createTypingPayload(this.identity.nick))
     }, TYPING_THROTTLE_MS, () => this.runtime.now())
   }
@@ -86,6 +92,10 @@ export class ChatSession {
     return isJoined(this.life)
   }
 
+  canSend(): boolean {
+    return canSend(this.life) && !this.offline
+  }
+
   getLines(): ChatLine[] {
     return this.transcript.snapshot()
   }
@@ -96,6 +106,7 @@ export class ChatSession {
 
   async join(spec: RoomSpec): Promise<void> {
     await this.teardown(false)
+    this.offline = false
     this.strategy = spec.strategy
     this.joinErrors = 0
     this.transport = this.createTransport(spec.strategy)
@@ -105,6 +116,7 @@ export class ChatSession {
       detail: connectingDetail(spec.strategy),
       relays: [],
       peerCount: 0,
+      canSend: false,
     })
     const token = this.epoch
 
@@ -144,20 +156,20 @@ export class ChatSession {
   }
 
   async sendChat(text: string): Promise<SendResult> {
-    if (!this.isJoined()) return 'closed'
+    if (!this.canSend()) return 'closed'
     const payload = createChatPayload(this.identity.nick, text, randomHex(8), this.runtime.now())
     if (!payload.text) return 'empty'
-    return this.dispatch(payload, this.presence.supports(FEATURE_ACK))
+    return this.dispatch(payload, this.presence.idsWith(FEATURE_ACK))
   }
 
   async resend(id: string): Promise<SendResult> {
-    if (!this.isJoined()) return 'closed'
+    if (!this.canSend()) return 'closed'
     const line = this.transcript.get(id)
     if (!line || line.kind !== 'chat' || !line.self) return 'empty'
     if (line.delivery !== 'failed' && line.delivery !== 'pending') return 'empty'
     const stored = this.outbound.payload(id)
     const payload = stored ?? createChatPayload(this.identity.nick, line.text, line.id, line.ts)
-    return this.dispatch(payload, this.presence.supports(FEATURE_ACK), true)
+    return this.dispatch(payload, this.presence.idsWith(FEATURE_ACK), true)
   }
 
   sendTyping(): void {
@@ -169,12 +181,19 @@ export class ChatSession {
     if (this.isJoined()) this.announce()
   }
 
+  noteOffline(): void {
+    if (!this.isJoined()) return
+    this.offline = true
+    this.heartbeat.stop()
+    this.refreshStatus('error', STATUS_COPY.offline)
+  }
+
   async leave(options: { silent?: boolean } = {}): Promise<void> {
     this.life = reduceLife(this.life, { type: 'leave' })
     await this.teardown(true)
     this.life = reduceLife(this.life, { type: 'left' })
     if (!options.silent) {
-      this.setStatus({ phase: 'idle', detail: STATUS_COPY.left, relays: [], peerCount: 0 })
+      this.setStatus({ phase: 'idle', detail: STATUS_COPY.left, relays: [], peerCount: 0, canSend: false })
       this.emitMembers()
       this.listeners.onReset?.([])
     }
@@ -186,6 +205,8 @@ export class ChatSession {
     this.outbound.dispose()
     this.outbound = new Outbound(this.runtime, ACK_TIMEOUT_MS, (id) => this.expireAck(id))
     this.presence.clear()
+    this.flood.clear()
+    this.lastLeft.clear()
     await this.transport.leave()
     if (wipeLog) this.transcript.clear()
   }
@@ -194,8 +215,9 @@ export class ChatSession {
     return token === this.epoch && this.isJoined()
   }
 
-  private async dispatch(payload: ChatPayload, expectAck: boolean, replace = false): Promise<SendResult> {
+  private async dispatch(payload: ChatPayload, waitFor: string[], replace = false): Promise<SendResult> {
     const token = this.epoch
+    const expectAck = waitFor.length > 0
     if (replace) this.patchDelivery(payload.id, expectAck ? 'pending' : undefined)
     else {
       this.pushLine(
@@ -219,7 +241,7 @@ export class ChatSession {
       return 'failed'
     }
     if (!this.live(token)) return 'closed'
-    if (expectAck) this.outbound.expect(payload.id, payload)
+    if (expectAck) this.outbound.expect(payload.id, payload, waitFor)
     return 'sent'
   }
 
@@ -227,19 +249,23 @@ export class ChatSession {
     if (!this.isJoined()) return
     applyIncoming(peerId, raw, (id) => this.transcript.has(id), {
       hello: (id, nick, features) => {
+        if (!this.admit(id, 'hello')) return
         this.presence.upsert(id, nick, features)
         this.emitMembers()
       },
       typing: (id, nick) => {
+        if (!this.admit(id, 'typing')) return
         this.presence.upsert(id, nick)
         this.presence.markTyping(id)
         this.emitMembers()
       },
       ack: (id, messageId, nick) => {
+        if (!this.admit(id, 'ack')) return
         this.presence.upsert(id, nick)
-        if (this.outbound.ack(messageId)) this.patchDelivery(messageId, 'acked')
+        if (this.outbound.ack(messageId, id)) this.patchDelivery(messageId, 'acked')
       },
       chat: (id, incoming) => {
+        if (!this.admit(id, 'chat')) return
         this.presence.upsert(id, incoming.nick)
         if (incoming.duplicate) {
           void this.transport.send(createAckPayload(this.identity.nick, incoming.id), id)
@@ -258,15 +284,32 @@ export class ChatSession {
         void this.transport.send(createAckPayload(this.identity.nick, incoming.id), id)
         this.emitMembers()
       },
+      sync: (id, incoming) => {
+        if (!this.admit(id, 'sync')) return
+        this.presence.upsert(id, incoming.nick)
+        if (this.transcript.mergeSync(incoming.lines, this.selfId)) {
+          this.listeners.onReset?.(this.transcript.snapshot())
+        }
+      },
     })
+  }
+
+  private admit(peerId: string, type: 'hello' | 'typing' | 'ack' | 'chat' | 'sync'): boolean {
+    const { limit, windowMs } = floodLimit(type)
+    return this.flood.allow(`${peerId}:${type}`, this.runtime.now(), limit, windowMs)
   }
 
   private onPeerJoin(peerId: string): void {
     if (!this.isJoined()) return
     const token = this.epoch
+    const leftAt = this.lastLeft.get(peerId)
+    const rejoin = leftAt !== undefined && this.runtime.now() - leftAt < REJOIN_GRACE_MS
+    this.lastLeft.delete(peerId)
     this.presence.upsert(peerId, '访客')
-    this.pushSystem(`${peerId.slice(0, 6)} 加入了房间`)
+    this.pushSystem(rejoin ? `${peerId.slice(0, 6)} ${STATUS_COPY.rejoined}` : `${peerId.slice(0, 6)} 加入了房间`)
     void this.transport.send(createHelloPayload(this.identity.nick), peerId)
+    const history = this.transcript.exportSync()
+    if (history.length > 0) void this.transport.send(createSyncPayload(this.identity.nick, history), peerId)
     this.emitMembers()
     this.notePeers()
     this.runtime.setTimeout(() => {
@@ -276,8 +319,10 @@ export class ChatSession {
 
   private onPeerLeave(peerId: string): void {
     if (!this.isJoined()) return
+    this.lastLeft.set(peerId, this.runtime.now())
     const member = this.presence.remove(peerId)
     this.pushSystem(`${member?.nick ?? peerId.slice(0, 6)} 离开了房间`)
+    for (const id of this.outbound.dropPeer(peerId)) this.patchDelivery(id, 'acked')
     this.emitMembers()
     this.notePeers()
   }
@@ -335,7 +380,7 @@ export class ChatSession {
   }
 
   private notePeers(): void {
-    this.life = reduceLife(this.life, { type: 'peers', count: this.presence.list().length })
+    this.life = reduceLife(this.life, { type: 'peers', count: this.presence.size() })
     this.emitStatus()
   }
 
@@ -344,7 +389,7 @@ export class ChatSession {
     const next = deriveStatus({
       life: this.life,
       strategy: this.strategy,
-      peerCount: this.presence.list().length,
+      peerCount: this.presence.size(),
       relays: this.transport.relays(),
     })
     if (next) this.setStatus(next)
@@ -355,13 +400,15 @@ export class ChatSession {
       phase,
       detail,
       relays: this.transport.relays(),
-      peerCount: this.presence.list().length,
+      peerCount: this.presence.size(),
+      canSend: canSend(this.life),
     })
   }
 
   private setStatus(status: SessionStatus): void {
-    if (sameStatus(this.status, status)) return
-    this.status = status
-    this.listeners.onStatus?.(status)
+    const next = { ...status, canSend: this.canSend() }
+    if (sameStatus(this.status, next)) return
+    this.status = next
+    this.listeners.onStatus?.(next)
   }
 }

@@ -5,7 +5,8 @@ import { parseHash, toHash } from '../core/router'
 import { canonicalizeSpec } from '../core/room'
 import { rememberSecret, withSecret } from '../core/secrets'
 import { watchDuplicateTab } from '../core/tab-guard'
-import type { RoomSpec, ThemePreference } from '../core/types'
+import { formatUnreadTitle, shouldCountUnread } from '../core/unread'
+import type { ChatLine, RoomSpec, ThemePreference } from '../core/types'
 import { capabilityBanner } from './capability'
 import { ChatPane } from './chat-pane'
 import { copy } from './copy'
@@ -30,6 +31,8 @@ export class App {
   private chat: ChatPane | null = null
   private lobbyEl: HTMLElement | null = null
   private stopTabWatch: (() => void) | null = null
+  private unread = 0
+  private baseTitle = typeof document === 'undefined' ? '禅聊 ZenChat' : document.title
 
   constructor(root: HTMLElement) {
     this.root = root
@@ -48,7 +51,7 @@ export class App {
     this.manager = new RoomManager(this.identity, {
       onStatus: (status) => this.chat?.status(status),
       onMembers: (members) => this.chat?.members(members, this.manager.selfId()),
-      onLine: (line) => this.chat?.push(line),
+      onLine: (line) => this.noteLine(line),
       onReset: (lines) => this.chat?.reset(lines),
     })
   }
@@ -59,6 +62,9 @@ export class App {
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applyTheme(this.theme))
     window.addEventListener('hashchange', () => {
       void this.route()
+    })
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) this.clearUnread()
     })
     window.addEventListener('pagehide', () => {
       this.stopTabWatch?.()
@@ -192,6 +198,19 @@ export class App {
     } catch {
       // ChatSession already emitted the error status, including live relays.
     }
+  }
+
+  private noteLine(line: ChatLine): void {
+    this.chat?.push(line)
+    if (!shouldCountUnread(line, document.hidden)) return
+    this.unread += 1
+    document.title = formatUnreadTitle(this.baseTitle, this.unread)
+  }
+
+  private clearUnread(): void {
+    if (this.unread === 0) return
+    this.unread = 0
+    document.title = this.baseTitle
   }
 
   private refreshChrome(spec?: RoomSpec): void {

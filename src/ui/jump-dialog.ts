@@ -12,9 +12,9 @@ export type JumpDialog = {
 }
 
 export function createJumpDialog(onJoin: (spec: RoomSpec) => void): JumpDialog {
-  const room = el('input', { placeholder: copy.room, maxlength: MAX_ROOM_LENGTH, autocomplete: 'off' }) as HTMLInputElement
-  const password = el('input', { placeholder: copy.password, type: 'password', autocomplete: 'off' }) as HTMLInputElement
-  const strategy = el('select', {}, [
+  const room = el('input', { id: 'jump-room', name: 'room', placeholder: copy.room, maxlength: MAX_ROOM_LENGTH }) as HTMLInputElement
+  const password = el('input', { id: 'jump-password', name: 'password', placeholder: copy.password, type: 'password', autocomplete: 'new-password' }) as HTMLInputElement
+  const strategy = el('select', { id: 'jump-strategy', name: 'strategy' }, [
     el('option', { value: 'torrent' }, [copy.torrent]),
     el('option', { value: 'nostr' }, [copy.nostr]),
   ]) as HTMLSelectElement

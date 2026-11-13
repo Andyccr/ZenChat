@@ -22,6 +22,7 @@ export const copy = {
   leave: '大厅',
   send: '发送',
   placeholder: '发消息',
+  connecting: '连接中…',
   members: '在线',
   you: '你',
   waiting: '还没有同伴，把链接发给对方',
